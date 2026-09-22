@@ -17,8 +17,15 @@ final class AppModel: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         do {
-            snapshot = try await EngineRunner.shared.snapshot()
-            errorMessage = nil
+            let refreshed = try await EngineRunner.shared.snapshot()
+            snapshot = refreshed
+
+            let missing = refreshed.preflight.missingRequirements
+            if missing.isEmpty {
+                errorMessage = nil
+            } else {
+                errorMessage = "Veronica is missing required dependencies: \(missing.joined(separator: ", ")). Install them, then refresh or relaunch Veronica. Annual maintenance will remain disabled until they are available."
+            }
         } catch {
             errorMessage = error.localizedDescription
             DiagnosticsCenter.shared.log("ERROR", "App", "Snapshot refresh failed: \(error.localizedDescription)")

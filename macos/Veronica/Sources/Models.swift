@@ -47,8 +47,28 @@ struct PreflightStatus: Codable {
         case pythonVersion = "python_version"
     }
 
+    var missingRequirements: [String] {
+        var missing: [String] = []
+
+        if python.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            missing.append("Python runtime")
+        }
+
+        if !pillow.available {
+            missing.append("Pillow")
+        }
+
+        for tool in ["file", "ffprobe", "ffmpeg", "HandBrakeCLI", "xattr"] {
+            if tools[tool]?.available != true {
+                missing.append(tool)
+            }
+        }
+
+        return missing
+    }
+
     var requiredToolsReady: Bool {
-        ["file", "ffprobe", "ffmpeg", "HandBrakeCLI", "xattr"].allSatisfy { tools[$0]?.available == true }
+        missingRequirements.isEmpty
     }
 }
 

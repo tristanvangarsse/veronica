@@ -63,6 +63,33 @@ final class DiagnosticsCenter: @unchecked Sendable {
         return text.split(separator: "\n", omittingEmptySubsequences: false).suffix(limit).joined(separator: "\n")
     }
 
+    private func isInsideAppBundle(_ path: String?) -> Bool {
+        guard let path, !path.isEmpty else { return false }
+
+        let candidate = URL(fileURLWithPath: path).standardizedFileURL.path
+        let bundle = Bundle.main.bundleURL.standardizedFileURL.path
+
+        return candidate == bundle || candidate.hasPrefix(bundle + "/")
+    }
+
+    private func runtimeSource(for path: String?) -> String {
+        guard let path, !path.isEmpty else { return "missing" }
+
+        if isInsideAppBundle(path) {
+            return "bundled"
+        }
+
+        if path == "/usr/bin/file" || path == "/usr/bin/xattr" {
+            return "macOS system"
+        }
+
+        if path.hasPrefix("/opt/homebrew/") || path.hasPrefix("/usr/local/") {
+            return "Homebrew/local dependency"
+        }
+
+        return "external"
+    }
+
     func privacySafeReport(snapshot: UISnapshot?, errorMessage: String?, events: [EngineEvent]) -> String {
         var lines: [String] = []
         let info = Bundle.main.infoDictionary ?? [:]
@@ -105,10 +132,34 @@ final class DiagnosticsCenter: @unchecked Sendable {
             lines.append("")
             lines.append("Runtime")
             lines.append("- Python/runtime: \(snapshot.preflight.pythonVersion)")
+            lines.append("- Engine executable: \(sanitize(snapshot.preflight.python, snapshot: snapshot))")
+            lines.append("- Engine source: \(runtimeSource(for: snapshot.preflight.python))")
             lines.append("- Pillow: \(snapshot.preflight.pillow.available ? (snapshot.preflight.pillow.version ?? "available") : "missing")")
+
+            lines.append("")
+            lines.append("Tools")
+
             for tool in ["file", "ffprobe", "ffmpeg", "HandBrakeCLI", "xattr"] {
-                let ready = snapshot.preflight.tools[tool]?.available == true
-                lines.append("- \(tool): \(ready ? "available" : "missing")")
+                let status = snapshot.preflight.tools[tool]
+                let ready = status?.available == true
+                let toolPath = status?.path
+
+                if ready, let toolPath, !toolPath.isEmpty {
+                    lines.append("- \(tool): available | \(sanitize(toolPath, snapshot: snapshot)) | \(runtimeSource(for: toolPath))")
+                } else {
+                    lines.append("- \(tool): missing")
+                }
+            }
+
+            let missingRequirements = snapshot.preflight.missingRequirements
+
+            lines.append("")
+            lines.append("Dependency readiness")
+            lines.append("- Ready for annual maintenance: \(missingRequirements.isEmpty ? "YES" : "NO")")
+            if missingRequirements.isEmpty {
+                lines.append("- Missing requirements: none")
+            } else {
+                lines.append("- Missing requirements: \(missingRequirements.joined(separator: ", "))")
             }
         } else {
             lines.append("State snapshot: unavailable")
