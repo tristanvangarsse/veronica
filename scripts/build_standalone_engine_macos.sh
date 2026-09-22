@@ -1,0 +1,32 @@
+#!/bin/bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BUILD="$ROOT/.build/engine"
+OUT="$ROOT/macos/Veronica/Resources/VeronicaEngine"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  echo "This script must be run on macOS." >&2
+  exit 2
+fi
+
+rm -rf "$BUILD"
+mkdir -p "$BUILD" "$OUT"
+"$PYTHON_BIN" -m venv "$BUILD/venv"
+"$BUILD/venv/bin/python" -m pip install --upgrade pip
+"$BUILD/venv/bin/python" -m pip install "pyinstaller>=6,<7" "Pillow==11.3.0"
+
+cd "$ROOT"
+"$BUILD/venv/bin/pyinstaller" \
+  --clean \
+  --noconfirm \
+  --onefile \
+  --name veronica-engine \
+  --paths "$ROOT" \
+  --hidden-import PIL \
+  veronica.py
+
+cp "$ROOT/dist/veronica-engine" "$OUT/veronica-engine"
+chmod 755 "$OUT/veronica-engine"
+cp "$ROOT/preset-720P.json" "$OUT/preset-720P.json"
+echo "Standalone Veronica engine staged at $OUT/veronica-engine"

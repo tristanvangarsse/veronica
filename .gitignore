@@ -1,0 +1,31 @@
+.DS_Store
+__pycache__/
+*.pyc
+.pytest_cache/
+.build/
+build/
+dist/
+macos/Veronica.xcodeproj/
+macos/DerivedData/
+*.xcuserstate
+xcuserdata/
+.env
+# Local Veronica state / reports (never source-controlled)
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.log
+plan-*.json
+plan-*.md
+staging-*.json
+staging-*.md
+annual-*.md
+quarantine/
+staging/
+
+# Local release/build artifacts
+*.dmg
+*.pkg
+
+.venv/

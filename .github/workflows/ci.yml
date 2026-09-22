@@ -1,0 +1,25 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  engine-tests:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - run: python -m pip install Pillow==11.3.0
+      - run: bash scripts/sync_engine_bundle.sh
+      - run: |
+          for f in tests/test_*.py; do
+            PYTHONPATH=. python "$f"
+          done
+  swift-build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: cd macos && xcodegen generate
+      - run: xcodebuild -project macos/Veronica.xcodeproj -scheme Veronica -configuration Debug CODE_SIGNING_ALLOWED=NO build

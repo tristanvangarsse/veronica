@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import media_maintenance as mm
+
+
+def main() -> int:
+    project = Path(__file__).resolve().parents[1]
+    script = project / "veronica.py"
+    with tempfile.TemporaryDirectory() as td:
+        base = Path(td)
+        root = base / "Media"
+        state = base / "state"
+        root.mkdir()
+        state.mkdir()
+        con = mm.init_db(state / "media-maintenance.sqlite", root)
+        con.close()
+        proc = subprocess.run(
+            [sys.executable, str(script), "ui-snapshot", "--state-dir", str(state)],
+            cwd=str(project), capture_output=True, text=True,
+        )
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        data = json.loads(proc.stdout)
+        assert data["version"] == "0.13.1"
+        assert data["state_dir"] == str(state.resolve())
+        assert data["active_assets"] == 0
+        assert data["unresolved_reviews"] == []
+        assert data["recent_changes"] == []
+        assert data["annual"]["cutoff_exclusive"].endswith("-01-01")
+    print("Veronica UI snapshot: PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,85 @@
+{
+  "archive_age_years": 2,
+  "legacy_processing_tags": [
+    "compressed-v1",
+    "compressed-v2",
+    "_compressed-v2"
+  ],
+  "legacy_v2_tags": [
+    "compressed-v2",
+    "_compressed-v2"
+  ],
+  "personal_tags_exclude": [
+    "compressed-v1",
+    "compressed-v2",
+    "_compressed-v2",
+    "temp-1",
+    "temp-2"
+  ],
+  "ignore_names": [
+    ".DS_Store"
+  ],
+  "roots": {
+    "Streams": {
+      "mode": "audit",
+      "expected_subfolders": {
+        "Image": "image",
+        "Video": "video",
+        "Audio": "audio"
+      }
+    },
+    "Photo_Library": {
+      "mode": "audit_cautious",
+      "protected_directory_names": [
+        "RAW",
+        "Capture",
+        "CaptureOne",
+        "Photoshop",
+        "Original",
+        "Retouch",
+        "Assets",
+        "Unused",
+        "Masters",
+        "Master",
+        "Source",
+        "Working",
+        "Negatives"
+      ]
+    },
+    "Imagehead": {
+      "mode": "read_only_archive"
+    }
+  },
+  "audio_min_size_mb": 10,
+  "streams_image_max_megapixels": 10,
+  "photo_library_max_megapixels": 20,
+  "video_preset_file": "preset-720P.json",
+  "policies": {
+    "streams_image": "streams-image-10mp-v1",
+    "photo_library_image": "photo-library-image-20mp-v1",
+    "streams_video": "streams-video-handbrake-square-pixel-720p-v4-no-autocrop",
+    "streams_audio": "streams-audio-mp3-128k-v1"
+  },
+  "streams_jpeg_quality": 50,
+  "photo_library_jpeg_quality": 70,
+  "minimum_saving_percent": 10.0,
+  "minimum_saving_bytes": 1048576,
+  "stage_copy_personal_finder_tags": true,
+  "creation_time_tolerance_seconds": 1.0,
+  "video_aspect_ratio_tolerance": 0.005,
+  "video_duration_tolerance_seconds": 0.1,
+  "video_duration_tolerance_fraction": 0.0025,
+  "video_frame_rate_tolerance_fraction": 0.01,
+  "video_max_storage_edge": 1280,
+  "video_review_hdr": true,
+  "video_review_extra_streams": true,
+  "video_review_vfr": true,
+  "video_vfr_min_timing_intervals": 10,
+  "video_vfr_cfr_like_max_outside_5_fraction": 0.01,
+  "video_vfr_cfr_like_max_p95_p05_spread": 1.05,
+  "video_review_multichannel_audio": true,
+  "video_require_square_pixels": true,
+  "video_crop_policy": "full-frame-no-autocrop",
+  "video_require_full_frame": true,
+  "video_full_frame_dimension_tolerance_pixels": 2
+}
