@@ -268,8 +268,13 @@ def _rewrite_state_paths(db_path: Path, old_root: Path, new_root: Path) -> int:
 
 def cmd_migrate_state(args: argparse.Namespace) -> int:
     """Safely relocate the legacy state directory into Application Support."""
-    source = Path(args.from_dir).expanduser().resolve()
-    target = Path(args.to_dir).expanduser().resolve()
+    # Keep the lexical path spellings as well as their canonical forms.
+    # On macOS, for example, /var resolves to /private/var. Historical DB
+    # rows may contain either spelling, so migration must recognize both.
+    source_input = Path(args.from_dir).expanduser().absolute()
+    target_input = Path(args.to_dir).expanduser().absolute()
+    source = source_input.resolve()
+    target = target_input.resolve()
     db_name = "media-maintenance.sqlite"
     source_db = source / db_name
     target_db = target / db_name
@@ -305,6 +310,12 @@ def cmd_migrate_state(args: argparse.Namespace) -> int:
     source.rename(target)
     try:
         changed = _rewrite_state_paths(target_db, source, target)
+
+        # Also rewrite the original lexical path spelling when it differs
+        # from the canonical spelling (notably /var vs /private/var on macOS).
+        if source_input != source or target_input != target:
+            changed += _rewrite_state_paths(target_db, source_input, target_input)
+
         after = _sqlite_quick_check(target_db)
         if after.lower() != "ok":
             raise RuntimeError(f"SQLite quick_check failed after migration: {after}")

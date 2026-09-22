@@ -45,13 +45,69 @@ struct SettingsView: View {
 
                 GroupBox("Runtime & media tools") {
                     if let p = model.snapshot?.preflight {
-                        VStack(alignment: .leading, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(p.requiredToolsReady ? "Ready for annual maintenance" : "Dependencies required")
+                                        .font(.headline)
+                                    Text(p.requiredToolsReady
+                                         ? "All required runtime components are available."
+                                         : "Annual maintenance remains disabled until the missing requirements below are available.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+
+                                Spacer()
+
+                                Button("Refresh") {
+                                    Task { await model.refresh() }
+                                }
+                                .disabled(model.isLoading)
+                            }
+
+                            if !p.missingRequirements.isEmpty {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Missing: \(p.missingRequirements.joined(separator: ", "))")
+                                        .font(.callout.weight(.medium))
+
+                                    if p.tools["ffmpeg"]?.available != true || p.tools["ffprobe"]?.available != true {
+                                        Text("brew install ffmpeg")
+                                            .font(.system(.caption, design: .monospaced))
+                                            .textSelection(.enabled)
+                                    }
+
+                                    if p.tools["HandBrakeCLI"]?.available != true {
+                                        Text("brew install handbrake")
+                                            .font(.system(.caption, design: .monospaced))
+                                            .textSelection(.enabled)
+                                    }
+
+                                    if !p.pillow.available {
+                                        Text("python3 -m pip install Pillow==11.3.0")
+                                            .font(.system(.caption, design: .monospaced))
+                                            .textSelection(.enabled)
+                                    }
+
+                                    if p.python.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        Text("Python 3 is required before Veronica can run its engine.")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .padding(10)
+                                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                            }
+
+                            Divider()
+
                             ToolRow(name: "Python / engine runtime", ready: !p.python.isEmpty, detail: p.pythonVersion)
                             ToolRow(name: "Pillow", ready: p.pillow.available, detail: p.pillow.version)
+
                             ForEach(["file", "ffprobe", "ffmpeg", "HandBrakeCLI", "xattr"], id: \.self) { name in
                                 ToolRow(name: name, ready: p.tools[name]?.available == true, detail: p.tools[name]?.path)
                             }
-                        }.padding(.vertical, 4)
+                        }
+                        .padding(.vertical, 4)
                     }
                 }
 
