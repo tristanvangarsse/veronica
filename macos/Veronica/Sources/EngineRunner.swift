@@ -87,6 +87,14 @@ final class EngineRunner {
         if let runtime = resourceURL("Runtime", "bin"), FileManager.default.fileExists(atPath: runtime.path) {
             pathParts.append(runtime.path)
         }
+
+        // Finder/Xcode-launched GUI apps do not inherit the interactive shell PATH.
+        // Development builds therefore add conventional Homebrew/local prefixes.
+        // Release builds still prefer Veronica's bundled tools above.
+        for path in ["/opt/homebrew/bin", "/usr/local/bin"] where FileManager.default.fileExists(atPath: path) {
+            pathParts.append(path)
+        }
+
         if let existing = env["PATH"], !existing.isEmpty { pathParts.append(existing) }
         env["PATH"] = pathParts.joined(separator: ":")
         env["PYTHONUNBUFFERED"] = "1"
@@ -94,6 +102,7 @@ final class EngineRunner {
     }
 
     func run(_ arguments: [String], onOutput: (@Sendable (String) -> Void)? = nil) async throws -> EngineResult {
+        DiagnosticsCenter.shared.log("INFO", "Engine", "Starting command: \(arguments.first ?? "unknown")")
         let process = Process()
         if let executable = standaloneEngineURL() {
             process.executableURL = executable
@@ -134,10 +143,15 @@ final class EngineRunner {
                 accumulator.append(errTail, isError: true)
                 let collected = accumulator.strings()
                 if let text = String(data: outTail + errTail, encoding: .utf8), !text.isEmpty { onOutput?(text) }
+                DiagnosticsCenter.shared.log(process.terminationStatus == 0 ? "INFO" : "ERROR", "Engine", "Command \(arguments.first ?? "unknown") exited \(process.terminationStatus)")
+                if DiagnosticsCenter.shared.developerMode && !collected.stderr.isEmpty { DiagnosticsCenter.shared.log("DEBUG", "Engine stderr", collected.stderr) }
                 continuation.resume(returning: EngineResult(exitCode: process.terminationStatus, stdout: collected.stdout, stderr: collected.stderr))
             }
             do { try process.run() }
-            catch { continuation.resume(throwing: error) }
+            catch {
+                DiagnosticsCenter.shared.log("ERROR", "Engine", "Failed to launch command \(arguments.first ?? "unknown"): \(error.localizedDescription)")
+                continuation.resume(throwing: error)
+            }
         }
     }
 

@@ -25,7 +25,7 @@ def main() -> int:
         )
         assert proc.returncode == 0, proc.stdout + proc.stderr
         data = json.loads(proc.stdout)
-        assert data["version"] == "0.13.1"
+        assert data["version"] == "0.13.2"
         assert data["state_dir"] == str(state.resolve())
         assert data["active_assets"] == 0
         assert data["unresolved_reviews"] == []

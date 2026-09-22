@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.2 - Native diagnostics workflow
+
+- Adds persistent local logging under `~/Library/Application Support/Veronica/logs/veronica.log` with bounded log rotation.
+- Adds Developer Mode for richer local engine diagnostics without changing media policy.
+- Adds **Copy Debug Info**, **Export Diagnostics…**, and **Reveal Log in Finder** to Settings and a Diagnostics app menu.
+- Diagnostic exports are privacy-sanitized and exclude media files and SQLite database contents.
+- Adds `scripts/debug_build_macos.sh` to capture exact Xcode compiler output in `/tmp/veronica-build.log`.
+- Logs engine command start/exit/failure information while keeping diagnostics failures non-fatal.
+- No conversion, verifier, database, quarantine, rollback, annual-policy, or review behavior changed.
+
 ## 0.13.1 - Portable first-run application foundation
 
 - Removes the personal media-root default from the high-level `annual` controller. Annual maintenance now uses the library selected in Veronica settings (or historical SQLite metadata for an upgraded installation).

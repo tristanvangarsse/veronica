@@ -36,4 +36,4 @@ targets:
         ENABLE_APP_SANDBOX: NO
         CODE_SIGN_STYLE: Automatic
         CURRENT_PROJECT_VERSION: 1
-        MARKETING_VERSION: 0.13.1
+        MARKETING_VERSION: 0.13.2

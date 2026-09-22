@@ -38,7 +38,7 @@ from typing import Any, Optional
 
 import media_audit as audit
 
-VERSION = "0.13.1"
+VERSION = "0.13.2"
 SCHEMA_VERSION = 9
 PRODUCT_NAME = "Veronica"
 DEFAULT_STATE_DIR = "~/Library/Application Support/Veronica"

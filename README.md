@@ -2,7 +2,7 @@
 
 Veronica is a macOS application for conservative annual media maintenance. It combines a native SwiftUI interface with the production-proven Python media engine that performs immutable planning, verified staging, bounded commits, per-file quarantine, rollback, durable `KEEP_ORIGINAL`, and guarded human review decisions.
 
-Version **0.13.1** is the first portability-focused release: it removes personal archive-path assumptions from the app, supports a clean first launch, stores the selected media library in Application Support, adds Settings and dependency diagnostics, and prepares the app bundle for a self-contained release engine and media tools.
+Version **0.13.2** adds a native diagnostics workflow on top of the portability foundation: it removes personal archive-path assumptions from the app, supports a clean first launch, stores the selected media library in Application Support, adds Settings and dependency diagnostics, and prepares the app bundle for a self-contained release engine and media tools.
 
 ## User experience
 
@@ -141,9 +141,15 @@ python3 veronica.py status
 
 `configure-library --root /path/to/library` stores the selected root in Application Support for fresh installations.
 
+## Debugging without screenshots
+
+Veronica writes a local app log to `~/Library/Application Support/Veronica/logs/veronica.log`. In Settings, **Developer Mode** enables more detailed local engine diagnostics. **Copy Debug Info** puts a privacy-safe report on the clipboard, and **Export Diagnostics…** creates a small ZIP containing a sanitized diagnostic report and recent log excerpt. Media files and the SQLite database are never included.
+
+For Swift/Xcode build failures, run `./scripts/debug_build_macos.sh`; it writes `/tmp/veronica-build.log` and prints the last 120 lines for easy sharing.
+
 ## Safety invariants
 
-0.13.1 does not weaken the proven media engine. It retains strict geometry/aspect-ratio checks, no auto-crop, square-pixel requirements, frame timing/VFR review gates, color metadata preservation, audio checks, creation/birthtime preservation, Finder tags, immutable plans, worthwhile-savings checks, bounded staging/commit windows, per-file quarantine, rollback, historical completion recognition, and durable guarded dispositions.
+0.13.2 does not weaken the proven media engine. It retains strict geometry/aspect-ratio checks, no auto-crop, square-pixel requirements, frame timing/VFR review gates, color metadata preservation, audio checks, creation/birthtime preservation, Finder tags, immutable plans, worthwhile-savings checks, bounded staging/commit windows, per-file quarantine, rollback, historical completion recognition, and durable guarded dispositions.
 
 ## License
 

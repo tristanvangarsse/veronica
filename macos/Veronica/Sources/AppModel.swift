@@ -10,8 +10,10 @@ final class AppModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var activityLines: [String] = []
     @Published var events: [EngineEvent] = []
+    @Published var developerMode = DiagnosticsCenter.shared.developerMode
 
     func refresh() async {
+        DiagnosticsCenter.shared.log("INFO", "App", "Refreshing UI snapshot")
         isLoading = true
         defer { isLoading = false }
         do {
@@ -19,6 +21,7 @@ final class AppModel: ObservableObject {
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
+            DiagnosticsCenter.shared.log("ERROR", "App", "Snapshot refresh failed: \(error.localizedDescription)")
         }
     }
 
@@ -137,6 +140,43 @@ final class AppModel: ObservableObject {
     func revealReview(_ item: ReviewItem) {
         guard let root = snapshot?.archiveRoot else { return }
         reveal(URL(fileURLWithPath: root).appendingPathComponent(item.relpath).path)
+    }
+
+    func setDeveloperMode(_ enabled: Bool) {
+        developerMode = enabled
+        DiagnosticsCenter.shared.developerMode = enabled
+        DiagnosticsCenter.shared.log("INFO", "Diagnostics", "Developer mode \(enabled ? "enabled" : "disabled")")
+    }
+
+    func copyDiagnosticReport() {
+        let report = DiagnosticsCenter.shared.privacySafeReport(snapshot: snapshot, errorMessage: errorMessage, events: events)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(report, forType: .string)
+        DiagnosticsCenter.shared.log("INFO", "Diagnostics", "Copied privacy-safe diagnostic report")
+    }
+
+    func exportDiagnostics() {
+        let panel = NSSavePanel()
+        panel.title = "Export Veronica Diagnostics"
+        panel.nameFieldStringValue = "Veronica-Diagnostics.zip"
+        panel.allowedContentTypes = [.zip]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try DiagnosticsCenter.shared.exportDiagnostics(to: url, snapshot: snapshot, errorMessage: errorMessage, events: events)
+            DiagnosticsCenter.shared.log("INFO", "Diagnostics", "Exported privacy-safe diagnostics ZIP")
+        } catch {
+            errorMessage = error.localizedDescription
+            DiagnosticsCenter.shared.log("ERROR", "Diagnostics", "Export failed: \(error.localizedDescription)")
+        }
+    }
+
+    func revealLogFile() {
+        let url = DiagnosticsCenter.shared.logURL
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: Data())
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     func revealStateDirectory() {
