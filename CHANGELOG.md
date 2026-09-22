@@ -60,7 +60,7 @@
 # v0.9.0
 
 - Adds `annual`, the small one-command yearly controller built on the existing immutable plan, staging, verification, bounded commit, quarantine, and reporting primitives.
-- `python3 media_maintenance.py annual --yes` defaults to the established personal media root and state directory and derives the annual cutoff from the existing planner using today as the run date.
+- `python3 veronica.py annual --yes` defaults to the established personal media root and state directory and derives the annual cutoff from the existing planner using today as the run date.
 - Preserves hard internal windows of at most 250 images and 25 videos per batch.
 - Refuses to start while live uncommitted verified staging outputs exist.
 - Stops before staging if the new immutable plan contains any unresolved `REVIEW` item.

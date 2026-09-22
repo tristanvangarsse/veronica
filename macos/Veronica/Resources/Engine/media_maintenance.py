@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Media Maintenance Phase 2 planner.
+"""Veronica media planner.
 
 v0.4.1 adds a bounded batch commit wrapper around the proven one-item quarantine transaction.
 
@@ -650,7 +650,7 @@ def resolved_keep_original_relpaths(con: sqlite3.Connection, plan_id: str, opera
 
 
 def historical_video_completion(con: sqlite3.Connection, asset_id: int, current_quick_hash: Optional[str], current_full_hash: Optional[str] = None) -> Optional[sqlite3.Row]:
-    """Return the latest committed Media Maintenance video conversion if the active file
+    """Return the latest committed Veronica video conversion if the active file
     still matches the output identity recorded by that commit. Historical policy versions
     remain accepted completion evidence; a later policy upgrade must not re-transcode an
     unchanged archive asset merely because the preferred policy changed.
@@ -785,7 +785,7 @@ def write_plan_files(state_dir: Path, plan: dict[str, Any]) -> tuple[Path, Path]
     json_path.write_text(json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8")
     ops = Counter(i["operation"] for i in plan["items"])
     lines = [
-        "# Media Maintenance Plan", "",
+        "# Veronica Plan", "",
         f"- Tool version: `{VERSION}`",
         f"- Plan ID: `{plan['plan_id']}`",
         f"- Run date: **{plan['run_date']}**",
@@ -1901,7 +1901,7 @@ def cmd_stage(args: argparse.Namespace) -> int:
             con.commit(); con.close()
             shutil.rmtree(stage_dir, ignore_errors=True)
             raise SystemExit("No live personally tagged media file was found for the required tag-preservation probe")
-    print(f"Media Maintenance {VERSION} staging executor")
+    print(f"Veronica {VERSION} staging executor")
     emit_event("staging_started", plan_id=plan["plan_id"], selected_images=counts["CONVERT_IMAGE"], selected_videos=counts["CONVERT_VIDEO"], selected_audio=counts["CONVERT_AUDIO"])
     print(f"Plan: {plan['plan_id']}")
     print(f"Mode: STAGING ONLY — source media will not be modified")
@@ -1972,7 +1972,7 @@ def cmd_stage(args: argparse.Namespace) -> int:
     report_md=state_dir/f"staging-{staging_id}.md"
     report_json.write_text(json.dumps(report,indent=2,ensure_ascii=False),encoding="utf-8")
     rc=Counter(r["status"] for r in results)
-    lines=["# Media Maintenance Staging Report","",f"- Tool version: `{VERSION}`",f"- Plan: `{plan['plan_id']}`",f"- Staging ID: `{staging_id}`",f"- Source root: `{root}`",f"- Staging directory: `{stage_dir}`","","## Results","","| Status | Files |","|---|---:|"]
+    lines=["# Veronica Staging Report","",f"- Tool version: `{VERSION}`",f"- Plan: `{plan['plan_id']}`",f"- Staging ID: `{staging_id}`",f"- Source root: `{root}`",f"- Staging directory: `{stage_dir}`","","## Results","","| Status | Files |","|---|---:|"]
     for k,v in rc.most_common(): lines.append(f"| `{k}` | {v} |")
     verified=[r for r in results if r.get("status")=="STAGED_VERIFIED"]
     verified_images=[r for r in verified if r.get("operation")=="CONVERT_IMAGE"]
@@ -2190,7 +2190,7 @@ def commit_one(args: argparse.Namespace, quiet: bool = False) -> dict[str, Any]:
                     (commit_id, relpath, item["operation"], "COMMITTED", original_sha, staged_sha, final_sha, str(quarantine_path), str(source), canonical_json(details)))
         report_path = state_dir / f"commit-{commit_id}.md"
         report_path.write_text("\n".join([
-            "# Media Maintenance Commit Report", "",
+            "# Veronica Commit Report", "",
             f"- Tool version: `{VERSION}`", f"- Commit ID: `{commit_id}`", f"- Staging ID: `{args.staging_id}`",
             f"- File: `{relpath}`", f"- Original quarantine: `{quarantine_path}`", f"- Installed file: `{source}`", "",
             "## Result", "", "- Status: **COMMITTED**", f"- Original SHA-256: `{original_sha}`", f"- Final SHA-256: `{final_sha}`",
@@ -2201,7 +2201,7 @@ def commit_one(args: argparse.Namespace, quiet: bool = False) -> dict[str, Any]:
         con.commit()
         result = {"status": "COMMITTED", "relpath": relpath, "commit_id": commit_id, "quarantine_path": str(quarantine_path), "report_path": str(report_path), "saving_percent": float(verification.get("saving_percent",0) or 0)}
         if not quiet:
-            print(f"Media Maintenance {VERSION} commit")
+            print(f"Veronica {VERSION} commit")
             print("Mode: ONE-FILE COMMIT WITH QUARANTINE")
             print(f"COMMITTED: {relpath}")
             print(f"Original quarantine: {quarantine_path}")
@@ -2373,7 +2373,7 @@ def commit_one_video(args: argparse.Namespace, quiet: bool = False) -> dict[str,
                      str(quarantine_path), str(final_path), canonical_json(details)))
         report_path = state_dir / f"commit-{commit_id}.md"
         report_path.write_text("\n".join([
-            "# Media Maintenance Video Commit Report", "",
+            "# Veronica Video Commit Report", "",
             f"- Tool version: `{VERSION}`", f"- Commit ID: `{commit_id}`", f"- Staging ID: `{args.staging_id}`",
             f"- Policy: `{item_policy}`", f"- Original file: `{item['relpath']}`", f"- Installed file: `{final_relpath}`",
             f"- Original quarantine: `{quarantine_path}`", "", "## Result", "", "- Status: **COMMITTED**",
@@ -2394,7 +2394,7 @@ def commit_one_video(args: argparse.Namespace, quiet: bool = False) -> dict[str,
             "saving_percent": float(verification.get("saving_percent", 0) or 0),
         }
         if not quiet:
-            print(f"Media Maintenance {VERSION} video commit")
+            print(f"Veronica {VERSION} video commit")
             print("Mode: ONE-VIDEO COMMIT WITH POLICY LOCK + QUARANTINE")
             print(f"COMMITTED: {item['relpath']} -> {final_relpath}")
             print(f"Policy: {item_policy}")
@@ -2478,7 +2478,7 @@ def cmd_commit_batch(args: argparse.Namespace) -> int:
     selected = candidates[:args.max_items]
     preflight = preflight_free_space(state_dir, commit_space_estimate(selected), "batch commit")
     batch_id = sha256_text(canonical_json({"staging_id": args.staging_id, "started": now_iso(), "relpaths": [r["relpath"] for r in selected]}))[:16]
-    print(f"Media Maintenance {VERSION} batch commit")
+    print(f"Veronica {VERSION} batch commit")
     print("Mode: BOUNDED IMAGE BATCH — EACH FILE HAS ITS OWN QUARANTINE TRANSACTION")
     print(f"Batch ID: {batch_id}")
     print(f"Selected: {len(selected)} image(s); hard cap=250")
@@ -2503,7 +2503,7 @@ def cmd_commit_batch(args: argparse.Namespace) -> int:
     counts = Counter(r["status"] for r in results)
     report_path = state_dir / f"batch-commit-{batch_id}.md"
     lines = [
-        "# Media Maintenance Batch Commit Report", "",
+        "# Veronica Batch Commit Report", "",
         f"- Tool version: `{VERSION}`", f"- Batch ID: `{batch_id}`", f"- Staging ID: `{args.staging_id}`",
         f"- Selected files: **{len(selected)}**", f"- Already committed and skipped: **{len(committed_before)}**", f"- Disk free at preflight: **{preflight['free_bytes']/1024**3:.2f} GiB**", f"- Estimated commit requirement incl. reserve: **{preflight['required_bytes']/1024**3:.2f} GiB**", "", "## Results", "",
         "| Status | Files |", "|---|---:|"
@@ -2554,7 +2554,7 @@ def cmd_commit_video_batch(args: argparse.Namespace) -> int:
     selected = candidates[:args.max_items]
     preflight = preflight_free_space(state_dir, commit_space_estimate(selected), "video batch commit")
     batch_id = sha256_text(canonical_json({"staging_id": args.staging_id, "started": now_iso(), "relpaths": [r["relpath"] for r in selected]}))[:16]
-    print(f"Media Maintenance {VERSION} video batch commit")
+    print(f"Veronica {VERSION} video batch commit")
     print("Mode: BOUNDED VIDEO BATCH — POLICY LOCKED; EACH FILE HAS ITS OWN QUARANTINE TRANSACTION")
     print(f"Batch ID: {batch_id}")
     print(f"Selected: {len(selected)} video(s); hard cap=25")
@@ -2578,7 +2578,7 @@ def cmd_commit_video_batch(args: argparse.Namespace) -> int:
     counts = Counter(r["status"] for r in results)
     report_path = state_dir / f"video-batch-commit-{batch_id}.md"
     lines = [
-        "# Media Maintenance Video Batch Commit Report", "",
+        "# Veronica Video Batch Commit Report", "",
         f"- Tool version: `{VERSION}`", f"- Batch ID: `{batch_id}`", f"- Staging ID: `{args.staging_id}`",
         f"- Selected files: **{len(selected)}**", f"- Already committed and skipped: **{len(committed_before)}**",
         f"- Disk free at preflight: **{preflight['free_bytes']/1024**3:.2f} GiB**",
@@ -2657,7 +2657,7 @@ def cmd_rollback(args: argparse.Namespace) -> int:
             con.execute("UPDATE processing_history SET status='ROLLED_BACK' WHERE asset_id=? AND policy_version=? AND operation=? AND status='COMMITTED'",
                         (int(asset_id), policy_version, r["operation"]))
         report_path = state_dir / f"rollback-{rollback_id}.md"
-        report_path.write_text("\n".join(["# Media Maintenance Rollback Report","",f"- Rollback ID: `{rollback_id}`",f"- Commit ID: `{args.commit_id}`",f"- Restored: `{restore_path}`",f"- Displaced committed output: `{displaced}`","","- Status: **ROLLED_BACK**",""]),encoding="utf-8")
+        report_path.write_text("\n".join(["# Veronica Rollback Report","",f"- Rollback ID: `{rollback_id}`",f"- Commit ID: `{args.commit_id}`",f"- Restored: `{restore_path}`",f"- Displaced committed output: `{displaced}`","","- Status: **ROLLED_BACK**",""]),encoding="utf-8")
         con.execute("UPDATE rollbacks SET completed_at=?,status='ROLLED_BACK',report_path=? WHERE rollback_id=?",(now_iso(),str(report_path),rollback_id))
         con.execute("UPDATE commit_items SET status='ROLLED_BACK' WHERE commit_id=? AND relpath=?",(args.commit_id,r["relpath"]))
         con.execute("UPDATE commits SET status='ROLLED_BACK' WHERE commit_id=?",(args.commit_id,))
@@ -2681,7 +2681,7 @@ def cmd_rollback(args: argparse.Namespace) -> int:
         con.close()
 
 def cmd_doctor() -> int:
-    print(f"Media Maintenance {VERSION} dependency check")
+    print(f"Veronica {VERSION} dependency check")
     for name in ["file", "ffprobe", "HandBrakeCLI", "ffmpeg", "xattr"]:
         p = audit.shutil.which(name)
         print(f"{name:<12} {'FOUND ' + p if p else 'not found' + (' (needed only for execution)' if name in {'HandBrakeCLI','ffmpeg'} else '')}")
@@ -2709,7 +2709,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
     cutoff_override = getattr(args, "cutoff_override", None)
     if cutoff_override:
         auditor.cutoff = dt.date.fromisoformat(cutoff_override)
-    print(f"Media Maintenance {VERSION} planner")
+    print(f"Veronica {VERSION} planner")
     print(f"Root: {root}")
     print(f"Cutoff: files before {auditor.cutoff.isoformat()}")
     print("Mode: PLAN ONLY (media files will not be changed)")
@@ -2757,7 +2757,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
                             "resolved_policy_version": kept["policy_version"]},
                 )
 
-        # Durable Media Maintenance video history is completion evidence across policy
+        # Durable Veronica video history is completion evidence across policy
         # upgrades, provided the active file still matches the output identity that was
         # recorded at commit time. This makes annual planning idempotent after the
         # .m4v/.mov -> .mp4 path migration and prevents an unchanged v3 result from being
@@ -2809,7 +2809,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
                             reason="video_source_probe_failed",
                             target={**item.get("target", {}), "probe_error": str(exc)})
         # Database history, not Finder tags, is authoritative for work completed by
-        # Media Maintenance itself. Exact current-policy history remains useful for image
+        # Veronica itself. Exact current-policy history remains useful for image
         # and audio operations; video historical completion is handled above because a
         # policy upgrade does not invalidate an unchanged archival result.
         if item.get("executable") and item.get("policy_version"):
@@ -2970,7 +2970,7 @@ def cmd_run_status(args: argparse.Namespace) -> int:
     stage_rows = list(con.execute("SELECT status,COUNT(*) n FROM staging_items GROUP BY status"))
     stage_counts = {r["status"]:int(r["n"]) for r in stage_rows}
     con.close()
-    print(f"Media Maintenance {VERSION} run status")
+    print(f"Veronica {VERSION} run status")
     print(f"Plan: {plan_id}")
     if plan and plan.get("video_policy_version"): print(f"Video policy: {plan['video_policy_version']}")
     for label,op in (("Images","CONVERT_IMAGE"),("Videos","CONVERT_VIDEO"),("Audio","CONVERT_AUDIO")):
@@ -3056,7 +3056,7 @@ def cmd_cleanup_superseded(args: argparse.Namespace) -> int:
         rec={"id":run["staging_id"],"path":path,"size":_staging_dir_size(path),"blockers":len(blockers),"superseded":superseded}
         (blocked if blockers else candidates).append(rec)
     con.close()
-    print(f"Media Maintenance {VERSION} superseded staging cleanup")
+    print(f"Veronica {VERSION} superseded staging cleanup")
     print(f"Safe-to-remove staging directories: {len(candidates)}")
     print(f"Blocked staging directories: {len(blocked)}")
     print(f"Potential reclaim: {sum(r['size'] for r in candidates)/1024**3:.2f} GiB")
@@ -3089,7 +3089,7 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
             if p.is_file():
                 try: size += p.stat().st_size
                 except OSError: pass
-    print(f"Media Maintenance {VERSION} cleanup")
+    print(f"Veronica {VERSION} cleanup")
     print(f"Staging ID: {args.staging_id}")
     print(f"Staging directory: {stage_dir}")
     print(f"Approximate reclaimable size: {size/1024**2:.1f} MiB")
@@ -3353,7 +3353,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     if not db.exists():
         raise SystemExit(f"No state database found: {db}")
     con = sqlite3.connect(db); con.row_factory = sqlite3.Row
-    print(f"Media Maintenance {VERSION} state")
+    print(f"Veronica {VERSION} state")
     print(f"Database: {db}")
     print(f"Assets: {con.execute('SELECT COUNT(*) FROM assets WHERE active=1').fetchone()[0]:,} active")
     legacy_v1 = con.execute("SELECT COUNT(*) FROM legacy_history WHERE legacy_tag='compressed-v1'").fetchone()[0]
@@ -3418,7 +3418,7 @@ def _annual_write_report(state_dir: Path, plan: dict[str, Any], status: str, sta
     ops = Counter(i.get("operation") for i in plan.get("items", []))
     report = state_dir / f"annual-{plan['run_date']}-{plan['plan_id'][:12]}.md"
     lines = [
-        "# Media Maintenance Annual Report", "",
+        "# Veronica Annual Report", "",
         f"- Tool version: `{VERSION}`",
         f"- Status: **{status}**",
         f"- Run date: **{plan['run_date']}**",
@@ -3497,7 +3497,7 @@ def cmd_annual(args: argparse.Namespace) -> int:
     annual_run_date = dt.date.fromisoformat(args.run_date) if args.run_date else dt.date.today()
     annual_cutoff = _annual_calendar_cutoff(annual_run_date)
 
-    print(f"Media Maintenance {VERSION} annual maintenance")
+    print(f"Veronica {VERSION} annual maintenance")
     print("Mode: ONE-COMMAND CONTROLLER WITH BOUNDED STAGING/COMMIT WINDOWS")
     print("Safety: any new REVIEW item or staging/commit anomaly stops automation")
     print(f"Annual calendar policy: include media through {annual_cutoff.year - 1}-12-31")
@@ -3637,7 +3637,7 @@ def cmd_annual(args: argparse.Namespace) -> int:
     return 0
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Veronica media-maintenance engine with resumable workflows and per-file quarantine")
+    p = argparse.ArgumentParser(description="Veronica engine with resumable workflows and per-file quarantine")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("doctor")
     pm = sub.add_parser("migrate-state", help="dry-run/perform the one-time move from Documents into ~/Library/Application Support/Veronica")

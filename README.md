@@ -1,6 +1,6 @@
 # Veronica
 
-Veronica is a macOS application for conservative annual media maintenance. It combines a native SwiftUI interface with the production-proven Python media engine that performs immutable planning, verified staging, bounded commits, per-file quarantine, rollback, durable `KEEP_ORIGINAL`, and guarded human review decisions.
+Veronica is a macOS application for conservative annual media care. It combines a native SwiftUI interface with the production-proven Python media engine that performs immutable planning, verified staging, bounded commits, per-file quarantine, rollback, durable `KEEP_ORIGINAL`, and guarded human review decisions.
 
 Version **0.13.2** adds a native diagnostics workflow on top of the portability foundation: it removes personal archive-path assumptions from the app, supports a clean first launch, stores the selected media library in Application Support, adds Settings and dependency diagnostics, and prepares the app bundle for a self-contained release engine and media tools.
 
@@ -121,7 +121,7 @@ A suitable local canonical checkout is any normal development directory, for exa
 
 Historical Veronica state remains valid. The engine can infer the existing library root from SQLite when no `settings.json` exists, so upgrading does not require reselecting the library. Once a database belongs to a library, Veronica refuses to repoint that same historical database to a different root; this protects source identity, quarantine, and rollback history.
 
-Legacy state still located in `~/Documents/Media Maintenance` can be migrated explicitly:
+Legacy Veronica state from the previous Documents-based storage location can be migrated explicitly:
 
 ```bash
 python3 veronica.py migrate-state

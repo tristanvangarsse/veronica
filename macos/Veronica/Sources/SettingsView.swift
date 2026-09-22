@@ -128,7 +128,7 @@ struct SettingsView: View {
 
                 GroupBox("About") {
                     LabeledContent("Veronica version") { Text(model.snapshot?.version ?? "0.13.2") }
-                    Text("Open-source media maintenance with verified staging, per-file quarantine, rollback, and durable audit history.")
+                    Text("Veronica uses verified staging, per-file quarantine, rollback, and durable audit history.")
                         .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
                 }
             }.padding(28)
