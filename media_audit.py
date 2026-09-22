@@ -389,6 +389,7 @@ class Auditor:
         filename_date = parse_filename_date(row["name"])
         embedded_date = parse_embedded_date(row.get("embedded_creation_time"))
         birth_date = dt.datetime.fromtimestamp(row["birth_ts"]).date() if row.get("birth_ts") else None
+        mtime_date = dt.datetime.fromtimestamp(row["mtime_ts"]).date() if row.get("mtime_ts") else None
         folder_year = row.get("folder_year")
         rel = Path(row["relpath"])
         root_name = rel.parts[0] if rel.parts else ""
@@ -423,6 +424,23 @@ class Auditor:
             best, conf, src = embedded_date, "HIGH", "embedded"
         elif filename_date:
             best, conf, src = filename_date, "MEDIUM", "filename"
+        elif (
+            birth_date
+            and mtime_date
+            and folder_year
+            and root_name == "Streams"
+            and birth_date == mtime_date
+            and birth_date.year == int(folder_year)
+        ):
+            # In the structured Streams archive, three independent pieces of
+            # ordinary filesystem/archive evidence agree: birth date, mtime,
+            # and containing year. That is strong enough for normal policy
+            # evaluation without inventing an exact date from the folder.
+            best, conf, src = (
+                birth_date,
+                "MEDIUM",
+                "filesystem_birth_mtime_folder_agree",
+            )
         elif birth_date:
             best, conf, src = birth_date, "LOW", "filesystem_birth"
         elif folder_year and root_name != "Photo_Library":

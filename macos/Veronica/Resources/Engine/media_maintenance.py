@@ -589,7 +589,14 @@ def historical_keep_original(con: sqlite3.Connection, asset_id: int, operation: 
     return row
 
 
-def historical_review_resolution(con: sqlite3.Connection, asset_id: int, review_reason: Optional[str], current_quick_hash: Optional[str], current_size: Optional[int] = None) -> Optional[sqlite3.Row]:
+def historical_review_resolution(
+    con: sqlite3.Connection,
+    asset_id: int,
+    review_reason: Optional[str],
+    current_quick_hash: Optional[str],
+    current_size: Optional[int] = None,
+    resolution: Optional[str] = None,
+) -> Optional[sqlite3.Row]:
     """Return a durable human review resolution only for the same content and reason.
 
     Review resolutions are deliberately separate from conversion dispositions such as
@@ -597,11 +604,20 @@ def historical_review_resolution(con: sqlite3.Connection, asset_id: int, review_
     """
     if not review_reason or not current_quick_hash:
         return None
-    row = con.execute(
+
+    sql = (
         "SELECT * FROM review_resolutions WHERE asset_id=? AND review_reason=? "
-        "AND resolution='KEEP_AS_IS' AND source_quick_hash=? ORDER BY resolution_id DESC LIMIT 1",
-        (asset_id, review_reason, current_quick_hash),
-    ).fetchone()
+        "AND source_quick_hash=?"
+    )
+    values: list[Any] = [asset_id, review_reason, current_quick_hash]
+
+    if resolution is not None:
+        sql += " AND resolution=?"
+        values.append(resolution)
+
+    sql += " ORDER BY resolution_id DESC LIMIT 1"
+
+    row = con.execute(sql, tuple(values)).fetchone()
     if row is not None and current_size is not None and int(row["source_size"]) != int(current_size):
         return None
     return row
@@ -612,7 +628,12 @@ def apply_historical_review_resolution(con: sqlite3.Connection, item: dict[str, 
     if item.get("operation") != "REVIEW":
         return item
     resolved = historical_review_resolution(
-        con, int(item["asset_id"]), item.get("reason"), item.get("source_quick_hash"), int(item.get("source_size") or 0)
+        con,
+        int(item["asset_id"]),
+        item.get("reason"),
+        item.get("source_quick_hash"),
+        int(item.get("source_size") or 0),
+        resolution="KEEP_AS_IS",
     )
     if resolved is None:
         return item
@@ -2738,7 +2759,37 @@ def cmd_plan(args: argparse.Namespace) -> int:
         tags = set(row.get("tags", []))
         if "compressed-v1" in tags: legacy_v1 += 1
         if tags & set(cfg.get("legacy_v2_tags", [])): legacy_v2 += 1
-        item = make_item(row, asset_id, cfg)
+        # PROCESS_NORMALLY is deliberately narrow. It may override only the
+        # auditor's date uncertainty for this exact source identity. It does not
+        # bypass any later media-policy or source-risk review.
+        process_normally = None
+        if row.get("action") == "REVIEW" and (
+            "date_low_confidence" in str(row.get("reason") or "")
+            or "date_conflict" in str(row.get("reason") or "")
+        ):
+            process_normally = historical_review_resolution(
+                con,
+                asset_id,
+                row.get("reason"),
+                row.get("quick_hash"),
+                int(row.get("size") or 0),
+                resolution="PROCESS_NORMALLY",
+            )
+
+        policy_row = row
+        if process_normally is not None:
+            policy_row = dict(row)
+            policy_row["action"] = "CANDIDATE"
+
+        item = make_item(policy_row, asset_id, cfg)
+
+        if process_normally is not None:
+            item["target"] = {
+                **item.get("target", {}),
+                "review_resolution": "PROCESS_NORMALLY",
+                "review_resolved_at": process_normally["decided_at"],
+                "review_original_reason": row.get("reason"),
+            }
 
         # A previous KEEP_ORIGINAL result is a successful terminal disposition for the
         # same source content under the same policy. It is not unfinished work.
@@ -3121,8 +3172,16 @@ def cmd_resolve_review(args: argparse.Namespace) -> int:
     item = items[0]
     if item.get("operation") != "REVIEW":
         raise SystemExit(f"Plan item is not REVIEW: operation={item.get('operation')} reason={item.get('reason')}")
-    if args.resolution != "KEEP_AS_IS":
+    if args.resolution not in {"KEEP_AS_IS", "PROCESS_NORMALLY"}:
         raise SystemExit(f"Unsupported review resolution: {args.resolution}")
+
+    if args.resolution == "PROCESS_NORMALLY":
+        reason = str(item.get("reason") or "")
+        if "date_low_confidence" not in reason and "date_conflict" not in reason:
+            raise SystemExit(
+                "PROCESS_NORMALLY is supported only for date-related review items. "
+                "This safety review cannot be bypassed."
+            )
 
     ok, why = verify_source_against_item(root, item)
     if not ok:
@@ -3154,7 +3213,12 @@ def cmd_resolve_review(args: argparse.Namespace) -> int:
         )
         con.commit()
         stored = historical_review_resolution(
-            con, int(db_item["asset_id"]), item["reason"], item.get("source_quick_hash"), int(item.get("source_size") or 0)
+            con,
+            int(db_item["asset_id"]),
+            item["reason"],
+            item.get("source_quick_hash"),
+            int(item.get("source_size") or 0),
+            resolution=args.resolution,
         )
         if stored is None:
             raise SystemExit("Review resolution was not persisted")
@@ -3266,7 +3330,8 @@ def cmd_ui_snapshot(args: argparse.Namespace) -> int:
             for row in rows:
                 resolved = con.execute(
                     "SELECT 1 FROM review_resolutions rr WHERE rr.asset_id=? AND rr.review_reason=? "
-                    "AND rr.resolution='KEEP_AS_IS' AND rr.source_quick_hash=? AND rr.source_size=? LIMIT 1",
+                    "AND rr.resolution IN ('KEEP_AS_IS','PROCESS_NORMALLY') "
+                    "AND rr.source_quick_hash=? AND rr.source_size=? LIMIT 1",
                     (int(row["asset_id"]), row["reason"], row["source_quick_hash"], int(row["source_size"])),
                 ).fetchone()
                 if resolved is None:
@@ -3701,7 +3766,7 @@ def main() -> int:
     prr.add_argument("--plan", required=True, help="path to frozen plan JSON containing the REVIEW item")
     prr.add_argument("--state-dir", default=DEFAULT_STATE_DIR)
     prr.add_argument("--relpath", required=True, help="exact REVIEW relpath from the frozen plan")
-    prr.add_argument("--resolution", choices=["KEEP_AS_IS"], required=True)
+    prr.add_argument("--resolution", choices=["KEEP_AS_IS", "PROCESS_NORMALLY"], required=True)
     prr.add_argument("--note", help="optional human rationale stored in SQLite audit history")
     prr.add_argument("--yes", action="store_true", help="required explicit acknowledgement of the durable database decision")
     pcfg = sub.add_parser("configure-library", help="store the selected media library in Veronica Application Support")

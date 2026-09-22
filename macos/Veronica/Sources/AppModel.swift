@@ -139,6 +139,36 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func processNormally(_ item: ReviewItem) async {
+        guard item.canProcessNormally else {
+            errorMessage = "This review issue cannot safely be bypassed."
+            return
+        }
+        guard let plan = item.planPath else {
+            errorMessage = "This review item is missing its immutable plan path."
+            return
+        }
+
+        do {
+            let result = try await EngineRunner.shared.run([
+                "resolve-review", "--plan", plan,
+                "--relpath", item.relpath,
+                "--resolution", "PROCESS_NORMALLY",
+                "--note", "Reviewed in Veronica.app; allow normal policy evaluation.",
+                "--yes"
+            ])
+
+            guard result.exitCode == 0 else {
+                errorMessage = result.stderr.isEmpty ? result.stdout : result.stderr
+                return
+            }
+
+            await refresh()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func reveal(_ path: String?) {
         guard let path else { return }
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])

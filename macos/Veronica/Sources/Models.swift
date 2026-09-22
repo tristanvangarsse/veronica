@@ -129,6 +129,10 @@ struct ReviewItem: Codable, Identifiable {
         case sourceSize = "source_size"
         case planPath = "plan_path"
     }
+    var canProcessNormally: Bool {
+        reason.contains("date_low_confidence") || reason.contains("date_conflict")
+    }
+
 
     var title: String {
         if reason.contains("variable_frame_rate") { return "Variable frame timing" }
