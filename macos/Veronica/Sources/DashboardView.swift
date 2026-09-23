@@ -44,9 +44,9 @@ struct DashboardView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             if let annual = model.snapshot?.annual {
-                Text("Veronica will scan your archive and consider media through \(annual.includeThrough). New review items or any verification anomaly will stop automation before unsafe work is committed.")
+                Text("Veronica will scan your configured folders and consider media through \(annual.includeThrough). New review items or any verification anomaly will stop automation before unsafe work is committed.")
             } else {
-                Text("Veronica will scan your archive and stop safely if anything needs review.")
+                Text("Veronica will scan your configured folders and stop safely if anything needs review.")
             }
         }
     }
@@ -133,11 +133,11 @@ struct StatusBanner: View {
         if running { return "Annual maintenance is running" }
         if !snapshot.unresolvedReviews.isEmpty { return "Your attention is needed" }
         if let remaining = snapshot.latestPlan?.remainingExecutableCount, remaining > 0 { return "Work is waiting" }
-        return "Archive is up to date"
+        return "Folders are up to date"
     }
 
     private var detail: String {
-        if running { return latestEvent?.title ?? "Veronica is scanning and verifying your archive." }
+        if running { return latestEvent?.title ?? "Veronica is scanning and verifying your configured folders." }
         if !snapshot.unresolvedReviews.isEmpty { return "\(snapshot.unresolvedReviews.count) item(s) need review before automatic maintenance can continue." }
         if let remaining = snapshot.latestPlan?.remainingExecutableCount, remaining > 0 { return "\(remaining) planned conversion(s) have not reached a terminal disposition yet." }
         return "No executable work or unresolved review decisions are waiting in the latest plan."

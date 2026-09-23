@@ -2,32 +2,73 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
+    @State private var pendingRemoval: String?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Settings").font(.largeTitle.bold())
-                    Text("Library location, Veronica data, runtime readiness, and diagnostics.").foregroundStyle(.secondary)
+                    Text("Folders, Veronica data, runtime readiness, and diagnostics.").foregroundStyle(.secondary)
                 }
 
-                GroupBox("Media library") {
+                GroupBox("Folders to scan") {
                     VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(model.snapshot?.archiveRoot ?? "No library selected").textSelection(.enabled)
-                                Text(model.snapshot?.archiveAvailable == true ? "Available" : "Unavailable")
-                                    .font(.caption)
-                                    .foregroundStyle(model.snapshot?.archiveAvailable == true ? Color.secondary : Color.red)
-                            }
-                            Spacer()
-                            Button("Choose…") { Task { await model.chooseLibrary() } }
-                        }
-                        Text("Changing the library does not delete historical Veronica state. A new annual scan establishes the selected library's current inventory.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }.padding(.vertical, 4)
-                }
+                        if let snapshot = model.snapshot, !snapshot.scanFolders.isEmpty {
+                            ForEach(snapshot.scanFolders, id: \.self) { path in
+                                HStack(spacing: 12) {
+                                    Image(systemName: "folder")
+                                        .foregroundStyle(.secondary)
 
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(path)
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                            .textSelection(.enabled)
+
+                                        let unavailable = snapshot.unavailableScanFolders.contains(path)
+                                        Text(unavailable ? "Unavailable" : "Available")
+                                            .font(.caption)
+                                            .foregroundStyle(unavailable ? Color.red : Color.secondary)
+                                    }
+
+                                    Spacer()
+
+                                    Button {
+                                        pendingRemoval = path
+                                    } label: {
+                                        Image(systemName: "minus")
+                                    }
+                                    .help("Remove folder")
+                                    .disabled(model.isRunningAnnual)
+                                }
+
+                                if path != snapshot.scanFolders.last {
+                                    Divider()
+                                }
+                            }
+                        } else {
+                            Text("No folders added.")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        HStack {
+                            Button {
+                                Task { await model.addScanFolders() }
+                            } label: {
+                                Label("Add Folders…", systemImage: "plus")
+                            }
+                            .disabled(model.isRunningAnnual)
+
+                            Spacer()
+                        }
+
+                        Text("Veronica scans only the folders listed here. You can add as many folders as you need. Removing a folder does not delete its media.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
                 GroupBox("Annual policy") {
                     if let annual = model.snapshot?.annual {
                         LabeledContent("Current scope") { Text("Media through \(annual.includeThrough)") }
@@ -204,6 +245,26 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
                 }
             }.padding(28)
+        }
+        .confirmationDialog(
+            "Remove this folder from Veronica?",
+            isPresented: Binding(
+                get: { pendingRemoval != nil },
+                set: { if !$0 { pendingRemoval = nil } }
+            )
+        ) {
+            Button("Remove Folder", role: .destructive) {
+                if let path = pendingRemoval {
+                    Task { await model.removeScanFolder(path) }
+                }
+                pendingRemoval = nil
+            }
+
+            Button("Cancel", role: .cancel) {
+                pendingRemoval = nil
+            }
+        } message: {
+            Text("Veronica will stop scanning this folder. Its media and Veronica history will not be deleted.")
         }
     }
 }

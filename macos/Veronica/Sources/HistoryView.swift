@@ -17,6 +17,11 @@ struct HistoryView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(URL(fileURLWithPath: item.relpath).lastPathComponent).lineLimit(1)
                             Text(item.operationLabel).font(.caption).foregroundStyle(.secondary)
+                            Text(item.root)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
                         }
                     }
                     TableColumn("Before") { item in

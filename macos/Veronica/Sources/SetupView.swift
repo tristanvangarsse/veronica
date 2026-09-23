@@ -10,15 +10,15 @@ struct SetupView: View {
                 .foregroundStyle(Color.accentColor)
             VStack(spacing: 8) {
                 Text("Welcome to Veronica").font(.largeTitle.bold())
-                Text("Choose the media library you want Veronica to maintain. Setup does not modify any media files.")
+                Text("Add the folders you want Veronica to scan. Setup does not modify any media files.")
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 520)
             }
             Button {
-                Task { await model.chooseLibrary() }
+                Task { await model.addScanFolders() }
             } label: {
-                Label("Choose Media Library…", systemImage: "folder.badge.plus")
+                Label("Add Folders…", systemImage: "folder.badge.plus")
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)

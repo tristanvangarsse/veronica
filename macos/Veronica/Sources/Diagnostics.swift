@@ -114,7 +114,9 @@ final class DiagnosticsCenter: @unchecked Sendable {
             lines.append("State")
             lines.append("- Configured: \(snapshot.configured)")
             lines.append("- Database exists: \(snapshot.databaseExists)")
-            lines.append("- Media library available: \(snapshot.archiveAvailable)")
+            lines.append("- Configured folders: \(snapshot.scanFolders.count)")
+            lines.append("- All configured folders available: \(snapshot.archiveAvailable)")
+            lines.append("- Unavailable folders: \(snapshot.unavailableScanFolders.count)")
             lines.append("- Active assets: \(snapshot.activeAssets)")
             lines.append("- Committed outputs: \(snapshot.committedOutputs)")
             lines.append("- Unresolved reviews: \(snapshot.unresolvedReviews.count)")
@@ -195,8 +197,13 @@ final class DiagnosticsCenter: @unchecked Sendable {
         var value = input
         let home = fm.homeDirectoryForCurrentUser.path
         value = value.replacingOccurrences(of: home, with: "<HOME>")
-        if let root = snapshot?.archiveRoot, !root.isEmpty {
-            value = value.replacingOccurrences(of: root, with: "<MEDIA_LIBRARY>")
+        if let snapshot {
+            for (index, root) in snapshot.scanFolders.enumerated() where !root.isEmpty {
+                value = value.replacingOccurrences(
+                    of: root,
+                    with: "<SCAN_FOLDER_\(index + 1)>"
+                )
+            }
         }
         if let state = snapshot?.stateDir, !state.isEmpty {
             value = value.replacingOccurrences(of: state, with: "<VERONICA_STATE>")

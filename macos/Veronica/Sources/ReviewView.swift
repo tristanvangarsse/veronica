@@ -39,6 +39,12 @@ struct ReviewView: View {
                                 .font(.subheadline)
                                 .textSelection(.enabled)
 
+                            Text(item.root)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+
                             Text(item.explanation)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -135,8 +141,7 @@ struct ReviewView: View {
     }
 
     private func reviewURL(for item: ReviewItem) -> URL? {
-        guard let root = model.snapshot?.archiveRoot else { return nil }
-        return URL(fileURLWithPath: root).appendingPathComponent(item.relpath)
+        URL(fileURLWithPath: item.root).appendingPathComponent(item.relpath)
     }
 }
 

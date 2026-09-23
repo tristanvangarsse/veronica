@@ -162,10 +162,26 @@ final class EngineRunner {
         return try JSONDecoder().decode(UISnapshot.self, from: data)
     }
 
-    func configureLibrary(_ path: String) async throws {
-        let result = try await run(["configure-library", "--root", path])
+    func addScanFolders(_ paths: [String]) async throws {
+        guard !paths.isEmpty else { return }
+        var arguments = ["configure-folders"]
+        for path in paths {
+            arguments += ["--add", path]
+        }
+        let result = try await run(arguments)
         guard result.exitCode == 0 else {
-            throw EngineRunnerError.invalidOutput(result.stderr.isEmpty ? result.stdout : result.stderr)
+            throw EngineRunnerError.invalidOutput(
+                result.stderr.isEmpty ? result.stdout : result.stderr
+            )
+        }
+    }
+
+    func removeScanFolder(_ path: String) async throws {
+        let result = try await run(["configure-folders", "--remove", path])
+        guard result.exitCode == 0 else {
+            throw EngineRunnerError.invalidOutput(
+                result.stderr.isEmpty ? result.stdout : result.stderr
+            )
         }
     }
 

@@ -217,6 +217,90 @@ def configured_archive_root(state_dir: Path, explicit: Optional[str] = None) -> 
     return database_archive_root(state_dir)
 
 
+def configured_scan_folders(state_dir: Path) -> list[Path]:
+    """Return Veronica's configured scan folders.
+
+    Existing installations are migrated logically: if scan_folders has never
+    been written, the historical archive_root/database root becomes the first
+    configured folder without modifying the database.
+    """
+    saved = load_product_settings(state_dir)
+
+    if "scan_folders" in saved:
+        raw = saved.get("scan_folders")
+        if not isinstance(raw, list):
+            return []
+
+        result: list[Path] = []
+        seen: set[str] = set()
+        for value in raw:
+            if not value:
+                continue
+            folder = Path(str(value)).expanduser().resolve()
+            key = str(folder)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(folder)
+        return result
+
+    legacy = saved.get("archive_root")
+    if legacy:
+        return [Path(str(legacy)).expanduser().resolve()]
+
+    database_root = database_archive_root(state_dir)
+    return [database_root] if database_root is not None else []
+
+
+def scan_folder_state_dir(base_state_dir: Path, folder: Path) -> Path:
+    """Return the isolated engine state directory for one configured folder.
+
+    The folder already owned by the historical Veronica database deliberately
+    keeps using base_state_dir so all existing history/quarantine/rollback
+    records remain valid. Other folders receive deterministic isolated state.
+    """
+    base_state_dir = base_state_dir.expanduser().resolve()
+    folder = folder.expanduser().resolve()
+
+    legacy_root = database_archive_root(base_state_dir)
+    if legacy_root is not None and legacy_root == folder:
+        return base_state_dir
+
+    folder_id = sha256_text(str(folder))[:16]
+    return base_state_dir / "folders" / folder_id
+
+
+def prepare_scan_folder_state(base_state_dir: Path, folder: Path) -> Path:
+    """Prepare one folder's isolated state without disturbing existing history."""
+    base_state_dir = base_state_dir.expanduser().resolve()
+    folder = folder.expanduser().resolve()
+    folder_state = scan_folder_state_dir(base_state_dir, folder)
+
+    existing_root = database_archive_root(folder_state)
+    if existing_root is not None and existing_root != folder:
+        raise SystemExit(
+            "Refusing to reuse Veronica folder state for a different root: "
+            f"state={folder_state} database_root={existing_root} requested_root={folder}"
+        )
+
+    # The historical/root state already owns its settings. Do not replace its
+    # top-level scan_folders list with a one-folder list.
+    if folder_state == base_state_dir:
+        return folder_state
+
+    parent_filename = filename_product_settings(base_state_dir)
+    child = load_product_settings(folder_state)
+    child["archive_root"] = str(folder)
+    child["scan_folders"] = [str(folder)]
+    child["filename_standardization_enabled"] = parent_filename["enabled"]
+    child["filename_date_format"] = parent_filename["date_format"]
+    child["filename_max_bytes"] = parent_filename["max_bytes"]
+    child["managed_by_multi_folder"] = True
+    child["parent_state_dir"] = str(base_state_dir)
+    save_product_settings(folder_state, child)
+    return folder_state
+
+
 def require_archive_root(state_dir: Path, explicit: Optional[str] = None) -> Path:
     root = configured_archive_root(state_dir, explicit)
     if root is None:
@@ -3908,6 +3992,67 @@ def cmd_configure_filenames(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_configure_folders(args: argparse.Namespace) -> int:
+    """Add/remove folders Veronica should scan without repointing old state."""
+    state_dir = Path(args.state_dir).expanduser().resolve()
+    current = load_product_settings(state_dir)
+    folders = configured_scan_folders(state_dir)
+
+    def normalized(value: str) -> Path:
+        return Path(value).expanduser().resolve()
+
+    for value in args.add or []:
+        folder = normalized(value)
+        if not folder.is_dir():
+            raise SystemExit(f"Folder does not exist or is not a directory: {folder}")
+        if folder not in folders:
+            folders.append(folder)
+
+    remove = {normalized(value) for value in (args.remove or [])}
+    folders = [folder for folder in folders if folder not in remove]
+
+    # Reject overlapping roots. Scanning both /Photos and /Photos/2024 would
+    # otherwise process the same file twice.
+    for index, left in enumerate(folders):
+        for right in folders[index + 1:]:
+            try:
+                right.relative_to(left)
+                raise SystemExit(
+                    f"Configured folders may not overlap: {left} contains {right}"
+                )
+            except ValueError:
+                pass
+            try:
+                left.relative_to(right)
+                raise SystemExit(
+                    f"Configured folders may not overlap: {right} contains {left}"
+                )
+            except ValueError:
+                pass
+
+    current["scan_folders"] = [str(folder) for folder in folders]
+    current["scan_folders_updated_at"] = now_iso()
+
+    # archive_root remains a compatibility field for the historical database.
+    # Never repoint it merely because folders were added/removed.
+    if "archive_root" not in current:
+        database_root = database_archive_root(state_dir)
+        if database_root is not None:
+            current["archive_root"] = str(database_root)
+
+    save_product_settings(state_dir, current)
+
+    payload = {
+        "scan_folders": [str(folder) for folder in folders],
+        "unavailable_scan_folders": [
+            str(folder) for folder in folders if not folder.is_dir()
+        ],
+        "state_dir": str(state_dir),
+    }
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
 def cmd_configure_library(args: argparse.Namespace) -> int:
     state_dir = Path(args.state_dir).expanduser().resolve()
     root = Path(args.root).expanduser().resolve()
@@ -3942,90 +4087,115 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_ui_snapshot(args: argparse.Namespace) -> int:
-    """Return a compact read-only JSON snapshot for the native Veronica UI."""
-    state_dir = Path(args.state_dir).expanduser().resolve()
+def _ui_snapshot_for_folder(root: Path, state_dir: Path, recent_limit: int) -> dict[str, Any]:
+    """Read UI state for exactly one configured folder/state database."""
     db = state_dir / "media-maintenance.sqlite"
-    archive_root = configured_archive_root(state_dir, getattr(args, "root", None))
-    today = dt.date.today()
-    cutoff = _annual_calendar_cutoff(today)
+
+    result = {
+        "root": str(root),
+        "state_dir": str(state_dir),
+        "database": str(db),
+        "database_exists": db.exists(),
+        "active_assets": 0,
+        "committed_outputs": 0,
+        "rolled_back_outputs": 0,
+        "total_saving_bytes": 0,
+        "quarantine_directories": 0,
+        "latest_plan": None,
+        "unresolved_reviews": [],
+        "recent_changes": [],
+    }
+
     if not db.exists():
-        payload = {
-            "version": VERSION,
-            "configured": archive_root is not None,
-            "database_exists": False,
-            "state_dir": str(state_dir),
-            "database": str(db),
-            "archive_root": str(archive_root) if archive_root else None,
-            "archive_available": bool(archive_root and archive_root.is_dir()),
-            "active_assets": 0,
-            "committed_outputs": 0,
-            "rolled_back_outputs": 0,
-            "total_saving_bytes": 0,
-            "quarantine_directories": 0,
-            "annual": {
-                "run_year": today.year,
-                "include_through": str(cutoff - dt.timedelta(days=1)),
-                "cutoff_exclusive": str(cutoff),
-            },
-            "latest_plan": None,
-            "unresolved_reviews": [],
-            "recent_changes": [],
-            "filename_policy": filename_product_settings(state_dir),
-            "preflight": dependency_status(),
-        }
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
-        return 0
+        return result
 
     con = sqlite3.connect(db)
     con.row_factory = sqlite3.Row
     try:
-        active_assets = int(con.execute("SELECT COUNT(*) FROM assets WHERE active=1").fetchone()[0])
-        committed_outputs = int(con.execute("SELECT COUNT(*) FROM commit_items WHERE status='COMMITTED'").fetchone()[0])
-        rolled_back_outputs = int(con.execute("SELECT COUNT(*) FROM commit_items WHERE status='ROLLED_BACK'").fetchone()[0])
-        total_saving_bytes = int(con.execute(
-            "SELECT COALESCE(SUM(si.saving_bytes),0) FROM commit_items ci "
-            "JOIN commits c ON c.commit_id=ci.commit_id "
-            "JOIN staging_items si ON si.staging_id=c.staging_id AND si.relpath=ci.relpath "
-            "WHERE ci.status='COMMITTED'"
-        ).fetchone()[0] or 0)
+        result["active_assets"] = int(
+            con.execute("SELECT COUNT(*) FROM assets WHERE active=1").fetchone()[0]
+        )
+        result["committed_outputs"] = int(
+            con.execute(
+                "SELECT COUNT(*) FROM commit_items WHERE status='COMMITTED'"
+            ).fetchone()[0]
+        )
+        result["rolled_back_outputs"] = int(
+            con.execute(
+                "SELECT COUNT(*) FROM commit_items WHERE status='ROLLED_BACK'"
+            ).fetchone()[0]
+        )
+        result["total_saving_bytes"] = int(
+            con.execute(
+                "SELECT COALESCE(SUM(si.saving_bytes),0) "
+                "FROM commit_items ci "
+                "JOIN commits c ON c.commit_id=ci.commit_id "
+                "JOIN staging_items si "
+                "ON si.staging_id=c.staging_id AND si.relpath=ci.relpath "
+                "WHERE ci.status='COMMITTED'"
+            ).fetchone()[0] or 0
+        )
 
-        latest = con.execute("SELECT * FROM plans ORDER BY created_at DESC LIMIT 1").fetchone()
-        latest_plan = None
-        unresolved_reviews = []
+        latest = con.execute(
+            "SELECT * FROM plans ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+
         if latest is not None:
             plan_id = str(latest["plan_id"])
-            plan_candidates = sorted(state_dir.glob(f"plan-*-{plan_id[:12]}.json"))
+            plan_candidates = sorted(
+                state_dir.glob(f"plan-*-{plan_id[:12]}.json")
+            )
             plan_path = str(plan_candidates[-1]) if plan_candidates else None
+
             rows = con.execute(
-                "SELECT pi.asset_id,pi.relpath,pi.reason,pi.source_quick_hash,pi.source_size "
-                "FROM plan_items pi WHERE pi.plan_id=? AND pi.operation='REVIEW' ORDER BY pi.seq",
+                "SELECT pi.asset_id,pi.relpath,pi.reason,"
+                "pi.source_quick_hash,pi.source_size "
+                "FROM plan_items pi "
+                "WHERE pi.plan_id=? AND pi.operation='REVIEW' "
+                "ORDER BY pi.seq",
                 (plan_id,),
             ).fetchall()
+
+            unresolved_reviews = []
+
             for row in rows:
                 resolved = con.execute(
-                    "SELECT 1 FROM review_resolutions rr WHERE rr.asset_id=? AND rr.review_reason=? "
+                    "SELECT 1 FROM review_resolutions rr "
+                    "WHERE rr.asset_id=? AND rr.review_reason=? "
                     "AND rr.resolution IN ('KEEP_AS_IS','PROCESS_NORMALLY') "
-                    "AND rr.source_quick_hash=? AND rr.source_size=? LIMIT 1",
-                    (int(row["asset_id"]), row["reason"], row["source_quick_hash"], int(row["source_size"])),
+                    "AND rr.source_quick_hash=? AND rr.source_size=? "
+                    "LIMIT 1",
+                    (
+                        int(row["asset_id"]),
+                        row["reason"],
+                        row["source_quick_hash"],
+                        int(row["source_size"]),
+                    ),
                 ).fetchone()
+
                 if resolved is None:
                     unresolved_reviews.append({
+                        "root": str(root),
+                        "state_dir": str(state_dir),
                         "relpath": row["relpath"],
                         "reason": row["reason"],
                         "source_size": int(row["source_size"]),
                         "plan_path": plan_path,
                     })
+
             remaining_executable_count = None
+
             if plan_path:
                 try:
                     frozen_plan = load_plan(Path(plan_path))
-                    remaining_executable_count = len(_annual_remaining(frozen_plan, state_dir))
+                    remaining_executable_count = len(
+                        _annual_remaining(frozen_plan, state_dir)
+                    )
                 except Exception:
-                    # UI status is diagnostic only; do not make a damaged/missing historical
-                    # plan prevent the rest of the read-only snapshot from loading.
                     remaining_executable_count = None
-            latest_plan = {
+
+            result["unresolved_reviews"] = unresolved_reviews
+            result["latest_plan"] = {
                 "plan_id": plan_id,
                 "created_at": latest["created_at"],
                 "run_date": latest["run_date"],
@@ -4039,41 +4209,176 @@ def cmd_ui_snapshot(args: argparse.Namespace) -> int:
             }
 
         recent = con.execute(
-            "SELECT ci.commit_id,ci.relpath,ci.operation,ci.final_path,c.completed_at,"
-            "COALESCE(si.source_size,0) source_size,COALESCE(si.output_size,0) output_size,"
-            "COALESCE(si.saving_bytes,0) saving_bytes,COALESCE(si.saving_percent,0) saving_percent "
-            "FROM commit_items ci JOIN commits c ON c.commit_id=ci.commit_id "
-            "LEFT JOIN staging_items si ON si.staging_id=c.staging_id AND si.relpath=ci.relpath "
-            "WHERE ci.status='COMMITTED' ORDER BY COALESCE(c.completed_at,c.started_at) DESC LIMIT ?",
-            (int(args.recent_limit),),
+            "SELECT ci.commit_id,ci.relpath,ci.operation,ci.final_path,"
+            "c.completed_at,"
+            "COALESCE(si.source_size,0) source_size,"
+            "COALESCE(si.output_size,0) output_size,"
+            "COALESCE(si.saving_bytes,0) saving_bytes,"
+            "COALESCE(si.saving_percent,0) saving_percent "
+            "FROM commit_items ci "
+            "JOIN commits c ON c.commit_id=ci.commit_id "
+            "LEFT JOIN staging_items si "
+            "ON si.staging_id=c.staging_id AND si.relpath=ci.relpath "
+            "WHERE ci.status='COMMITTED' "
+            "ORDER BY COALESCE(c.completed_at,c.started_at) DESC "
+            "LIMIT ?",
+            (int(recent_limit),),
         ).fetchall()
-        recent_changes = [{
-            "commit_id": r["commit_id"],
-            "relpath": r["relpath"],
-            "operation": r["operation"],
-            "final_path": r["final_path"],
-            "completed_at": r["completed_at"],
-            "source_size": int(r["source_size"] or 0),
-            "output_size": int(r["output_size"] or 0),
-            "saving_bytes": int(r["saving_bytes"] or 0),
-            "saving_percent": float(r["saving_percent"] or 0.0),
-        } for r in recent]
+
+        result["recent_changes"] = [{
+            "root": str(root),
+            "state_dir": str(state_dir),
+            "commit_id": row["commit_id"],
+            "relpath": row["relpath"],
+            "operation": row["operation"],
+            "final_path": row["final_path"],
+            "completed_at": row["completed_at"],
+            "source_size": int(row["source_size"] or 0),
+            "output_size": int(row["output_size"] or 0),
+            "saving_bytes": int(row["saving_bytes"] or 0),
+            "saving_percent": float(row["saving_percent"] or 0.0),
+        } for row in recent]
+
     finally:
         con.close()
 
+    quarantine = state_dir / "quarantine"
+    if quarantine.exists():
+        result["quarantine_directories"] = sum(
+            1 for item in quarantine.iterdir() if item.is_dir()
+        )
+
+    return result
+
+
+def cmd_ui_snapshot(args: argparse.Namespace) -> int:
+    """Return an aggregated read-only snapshot for every configured folder."""
+    state_dir = Path(args.state_dir).expanduser().resolve()
+    db = state_dir / "media-maintenance.sqlite"
+
+    scan_folders = configured_scan_folders(state_dir)
+    unavailable_scan_folders = [
+        folder for folder in scan_folders if not folder.is_dir()
+    ]
+
+    today = dt.date.today()
+    cutoff = _annual_calendar_cutoff(today)
+
+    folder_states = [
+        _ui_snapshot_for_folder(
+            folder,
+            scan_folder_state_dir(state_dir, folder),
+            int(args.recent_limit),
+        )
+        for folder in scan_folders
+    ]
+
+    active_assets = sum(x["active_assets"] for x in folder_states)
+    committed_outputs = sum(x["committed_outputs"] for x in folder_states)
+    rolled_back_outputs = sum(x["rolled_back_outputs"] for x in folder_states)
+    total_saving_bytes = sum(x["total_saving_bytes"] for x in folder_states)
+    quarantine_directories = sum(
+        x["quarantine_directories"] for x in folder_states
+    )
+
+    unresolved_reviews = []
+    recent_changes = []
+    latest_plans = []
+
+    for folder_state in folder_states:
+        unresolved_reviews.extend(folder_state["unresolved_reviews"])
+        recent_changes.extend(folder_state["recent_changes"])
+
+        if folder_state["latest_plan"] is not None:
+            latest_plans.append(folder_state["latest_plan"])
+
+    recent_changes.sort(
+        key=lambda item: item.get("completed_at") or "",
+        reverse=True,
+    )
+    recent_changes = recent_changes[:int(args.recent_limit)]
+
+    latest_plan = None
+
+    if latest_plans:
+        remaining_values = [
+            plan["remaining_executable_count"]
+            for plan in latest_plans
+        ]
+
+        if all(value is not None for value in remaining_values):
+            remaining_executable_count = sum(
+                int(value) for value in remaining_values
+            )
+        else:
+            remaining_executable_count = None
+
+        latest_created = max(
+            str(plan["created_at"]) for plan in latest_plans
+        )
+        latest_run_date = max(
+            str(plan["run_date"]) for plan in latest_plans
+        )
+        latest_cutoff = max(
+            str(plan["cutoff"]) for plan in latest_plans
+        )
+
+        if len(latest_plans) == 1:
+            aggregate_plan_id = latest_plans[0]["plan_id"]
+            aggregate_plan_path = latest_plans[0]["plan_path"]
+        else:
+            aggregate_plan_id = "multi-" + sha256_text(
+                canonical_json(sorted(plan["plan_id"] for plan in latest_plans))
+            )[:24]
+            aggregate_plan_path = None
+
+        latest_plan = {
+            "plan_id": aggregate_plan_id,
+            "created_at": latest_created,
+            "run_date": latest_run_date,
+            "cutoff": latest_cutoff,
+            "item_count": sum(
+                int(plan["item_count"]) for plan in latest_plans
+            ),
+            "executable_count": sum(
+                int(plan["executable_count"]) for plan in latest_plans
+            ),
+            "remaining_executable_count": remaining_executable_count,
+            "review_count": sum(
+                int(plan["review_count"]) for plan in latest_plans
+            ),
+            "unresolved_review_count": len(unresolved_reviews),
+            "plan_path": aggregate_plan_path,
+        }
+
+    legacy_root = database_archive_root(state_dir)
+
     payload = {
         "version": VERSION,
-        "configured": archive_root is not None,
-        "database_exists": True,
+        "configured": bool(scan_folders),
+        "database_exists": any(
+            folder_state["database_exists"] for folder_state in folder_states
+        ),
         "state_dir": str(state_dir),
         "database": str(db),
-        "archive_root": str(archive_root) if archive_root else None,
-        "archive_available": bool(archive_root and archive_root.is_dir()),
+
+        # Compatibility only. Native UI uses scan_folders and per-item roots.
+        "archive_root": str(legacy_root) if legacy_root else None,
+
+        # Compatibility name; now means every configured scan folder is available.
+        "archive_available": (
+            bool(scan_folders) and not unavailable_scan_folders
+        ),
+
+        "scan_folders": [str(folder) for folder in scan_folders],
+        "unavailable_scan_folders": [
+            str(folder) for folder in unavailable_scan_folders
+        ],
         "active_assets": active_assets,
         "committed_outputs": committed_outputs,
         "rolled_back_outputs": rolled_back_outputs,
         "total_saving_bytes": total_saving_bytes,
-        "quarantine_directories": sum(1 for p in (state_dir / "quarantine").iterdir() if p.is_dir()) if (state_dir / "quarantine").exists() else 0,
+        "quarantine_directories": quarantine_directories,
         "annual": {
             "run_year": today.year,
             "include_through": str(cutoff - dt.timedelta(days=1)),
@@ -4085,6 +4390,7 @@ def cmd_ui_snapshot(args: argparse.Namespace) -> int:
         "filename_policy": filename_product_settings(state_dir),
         "preflight": dependency_status(),
     }
+
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
     return 0
 
@@ -4204,6 +4510,73 @@ def _annual_calendar_cutoff(run_date: dt.date) -> dt.date:
     annual invocation does not affect eligibility.
     """
     return dt.date(run_date.year - 1, 1, 1)
+
+
+def cmd_annual_all(args: argparse.Namespace) -> int:
+    """Run the proven single-folder annual controller for every configured folder."""
+    if not args.yes:
+        raise SystemExit(
+            "Annual maintenance can commit verified media. "
+            "Re-run with --yes to acknowledge bounded commit operations."
+        )
+
+    base_state_dir = Path(args.state_dir).expanduser().resolve()
+    folders = configured_scan_folders(base_state_dir)
+
+    if not folders:
+        raise SystemExit(
+            "No folders are configured. Add at least one folder in Veronica Settings first."
+        )
+
+    unavailable = [folder for folder in folders if not folder.is_dir()]
+    if unavailable:
+        print("Refusing annual run because configured folder(s) are unavailable:")
+        for folder in unavailable:
+            print(f"  {folder}")
+        return 2
+
+    print(f"Veronica {VERSION} multi-folder annual maintenance")
+    print(f"Configured folders: {len(folders)}")
+    print("Each folder uses an independent state database.")
+    print("Any REVIEW item, staging anomaly, or commit failure stops the full run.")
+
+    for index, folder in enumerate(folders, 1):
+        folder_state = prepare_scan_folder_state(base_state_dir, folder)
+
+        print("")
+        print("=" * 72)
+        print(f"Folder {index}/{len(folders)}")
+        print(f"Root: {folder}")
+        print(f"State: {folder_state}")
+        print("=" * 72)
+
+        child_args = argparse.Namespace(
+            root=str(folder),
+            state_dir=str(folder_state),
+            config=args.config,
+            run_date=args.run_date,
+            rename_batch=args.rename_batch,
+            image_batch=args.image_batch,
+            video_batch=args.video_batch,
+            yes=True,
+            events_jsonl=args.events_jsonl,
+        )
+
+        rc = cmd_annual(child_args)
+        if rc != 0:
+            print("")
+            print(
+                f"STOP: folder {index}/{len(folders)} did not complete safely: {folder}"
+            )
+            print("Remaining configured folders were not processed.")
+            return rc
+
+    print("")
+    print("=" * 72)
+    print("MULTI-FOLDER ANNUAL MAINTENANCE COMPLETE")
+    print(f"Folders completed: {len(folders)}")
+    print("=" * 72)
+    return 0
 
 
 def cmd_annual(args: argparse.Namespace) -> int:
@@ -4493,6 +4866,16 @@ def main() -> int:
     pm.add_argument("--from-dir", default=LEGACY_STATE_DIR)
     pm.add_argument("--to-dir", default=DEFAULT_STATE_DIR)
     pm.add_argument("--apply", action="store_true", help="perform the atomic migration; default is dry-run")
+    paa = sub.add_parser("annual-all", help="run annual maintenance across all configured scan folders using isolated per-folder state")
+    paa.add_argument("--state-dir", default=DEFAULT_STATE_DIR)
+    paa.add_argument("--config")
+    paa.add_argument("--run-date", help="YYYY-MM-DD; defaults to today")
+    paa.add_argument("--rename-batch", type=int, default=250, help="bounded filename-only rename window; max 250")
+    paa.add_argument("--image-batch", type=int, default=250, help="bounded image staging/commit window; max 250")
+    paa.add_argument("--video-batch", type=int, default=25, help="bounded video staging/commit window; max 25")
+    paa.add_argument("--yes", action="store_true", help="required acknowledgement that verified media may be committed")
+    paa.add_argument("--events-jsonl", help="optional JSON-lines progress/event file for the Veronica GUI")
+
     pa = sub.add_parser("annual", help="one-command yearly plan/stage/verify/commit/report controller; stops on REVIEW or any anomaly")
     pa.add_argument("--root", help="media library root; defaults to Veronica settings")
     pa.add_argument("--state-dir", default=DEFAULT_STATE_DIR)
@@ -4565,6 +4948,11 @@ def main() -> int:
     pfn.add_argument("--date-format", default="YYYY-MM-DD_")
     pfn.add_argument("--max-bytes", type=int, required=True)
 
+    pfolders = sub.add_parser("configure-folders", help="add or remove folders Veronica should scan")
+    pfolders.add_argument("--state-dir", default=DEFAULT_STATE_DIR)
+    pfolders.add_argument("--add", action="append", default=[])
+    pfolders.add_argument("--remove", action="append", default=[])
+
     pcfg = sub.add_parser("configure-library", help="store the selected media library in Veronica Application Support")
     pcfg.add_argument("--state-dir", default=DEFAULT_STATE_DIR)
     pcfg.add_argument("--root", required=True)
@@ -4598,6 +4986,7 @@ def main() -> int:
     args = p.parse_args()
     if args.cmd == "doctor": return cmd_doctor()
     if args.cmd == "migrate-state": return cmd_migrate_state(args)
+    if args.cmd == "annual-all": return cmd_annual_all(args)
     if args.cmd == "annual": return cmd_annual(args)
     if args.cmd == "plan": return cmd_plan(args)
     if args.cmd == "stage": return cmd_stage(args)
@@ -4609,6 +4998,7 @@ def main() -> int:
     if args.cmd == "rollback": return cmd_rollback(args)
     if args.cmd == "resolve-review": return cmd_resolve_review(args)
     if args.cmd == "configure-filenames": return cmd_configure_filenames(args)
+    if args.cmd == "configure-folders": return cmd_configure_folders(args)
     if args.cmd == "configure-library": return cmd_configure_library(args)
     if args.cmd == "preflight": return cmd_preflight(args)
     if args.cmd == "ui-snapshot": return cmd_ui_snapshot(args)

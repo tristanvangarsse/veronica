@@ -8,6 +8,8 @@ struct UISnapshot: Codable {
     let database: String
     let archiveRoot: String?
     let archiveAvailable: Bool
+    let scanFolders: [String]
+    let unavailableScanFolders: [String]
     let activeAssets: Int
     let committedOutputs: Int
     let rolledBackOutputs: Int
@@ -26,6 +28,8 @@ struct UISnapshot: Codable {
         case stateDir = "state_dir"
         case archiveRoot = "archive_root"
         case archiveAvailable = "archive_available"
+        case scanFolders = "scan_folders"
+        case unavailableScanFolders = "unavailable_scan_folders"
         case activeAssets = "active_assets"
         case committedOutputs = "committed_outputs"
         case rolledBackOutputs = "rolled_back_outputs"
@@ -133,13 +137,16 @@ struct LatestPlan: Codable {
 }
 
 struct ReviewItem: Codable, Identifiable {
-    var id: String { relpath }
+    var id: String { root + "|" + relpath }
+    let root: String
+    let stateDir: String
     let relpath: String
     let reason: String
     let sourceSize: Int64
     let planPath: String?
     enum CodingKeys: String, CodingKey {
-        case relpath, reason
+        case root, relpath, reason
+        case stateDir = "state_dir"
         case sourceSize = "source_size"
         case planPath = "plan_path"
     }
@@ -177,7 +184,9 @@ struct ReviewItem: Codable, Identifiable {
 }
 
 struct RecentChange: Codable, Identifiable {
-    var id: String { commitId + relpath }
+    var id: String { root + "|" + commitId + "|" + relpath }
+    let root: String
+    let stateDir: String
     let commitId: String
     let relpath: String
     let operation: String
@@ -188,8 +197,9 @@ struct RecentChange: Codable, Identifiable {
     let savingBytes: Int64
     let savingPercent: Double
     enum CodingKeys: String, CodingKey {
+        case root, relpath, operation
+        case stateDir = "state_dir"
         case commitId = "commit_id"
-        case relpath, operation
         case finalPath = "final_path"
         case completedAt = "completed_at"
         case sourceSize = "source_size"
@@ -244,7 +254,7 @@ struct EngineEvent: Codable, Identifiable {
         switch event {
         case "annual_started": return "Annual maintenance started"
         case "annual_cutoff": return "Annual scope confirmed"
-        case "plan_complete": return "Archive scan complete"
+        case "plan_complete": return "Folder scan complete"
         case "batch_started": return "Starting conversion batch"
         case "staging_started": return "Preparing verified replacements"
         case "stage_item":
@@ -262,7 +272,7 @@ struct EngineEvent: Codable, Identifiable {
         if let relpath { return relpath }
         if event == "annual_cutoff", let includeThrough { return "Media through \(includeThrough)" }
         if event == "plan_complete" {
-            let inventory = inventoried.map { "\($0.formatted()) files" } ?? "Archive"
+            let inventory = inventoried.map { "\($0.formatted()) files" } ?? "Folder"
             let work = executable.map { "\($0) executable" } ?? ""
             let reviews = review.map { "\($0) review" } ?? ""
             return [inventory, work, reviews].filter { !$0.isEmpty }.joined(separator: " • ")

@@ -55,21 +55,36 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func chooseLibrary() async {
+    func addScanFolders() async {
         let panel = NSOpenPanel()
-        panel.title = "Choose Media Library"
-        panel.message = "Choose the top-level folder Veronica should maintain. Veronica never modifies files during setup."
-        panel.prompt = "Choose Library"
+        panel.title = "Add Folders"
+        panel.message = "Choose one or more folders Veronica should scan."
+        panel.prompt = "Add"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
+        panel.allowsMultipleSelection = true
         panel.canCreateDirectories = false
-        if let current = snapshot?.archiveRoot {
+
+        if let current = snapshot?.scanFolders.first {
             panel.directoryURL = URL(fileURLWithPath: current)
         }
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        guard panel.runModal() == .OK else { return }
+
+        let paths = panel.urls.map(\.path)
+        guard !paths.isEmpty else { return }
+
         do {
-            try await EngineRunner.shared.configureLibrary(url.path)
+            try await EngineRunner.shared.addScanFolders(paths)
+            await refresh()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func removeScanFolder(_ path: String) async {
+        do {
+            try await EngineRunner.shared.removeScanFolder(path)
             await refresh()
         } catch {
             errorMessage = error.localizedDescription
@@ -79,13 +94,14 @@ final class AppModel: ObservableObject {
     func runAnnual() async {
         guard !isRunningAnnual else { return }
         guard snapshot?.configured == true else {
-            errorMessage = "Choose a media library before running annual maintenance."
+            errorMessage = "Add at least one folder before running annual maintenance."
             return
         }
         guard snapshot?.archiveAvailable == true else {
-            errorMessage = "The configured media library is currently unavailable."
+            errorMessage = "One or more configured folders are currently unavailable."
             return
         }
+
         guard snapshot?.preflight.requiredToolsReady == true else {
             errorMessage = "Veronica is missing one or more required media tools. Open Settings to see what is unavailable."
             return
@@ -112,7 +128,7 @@ final class AppModel: ObservableObject {
         }
 
         do {
-            let result = try await EngineRunner.shared.run(["annual", "--yes", "--events-jsonl", eventURL.path]) { chunk in
+            let result = try await EngineRunner.shared.run(["annual-all", "--yes", "--events-jsonl", eventURL.path]) { chunk in
                 Task { @MainActor in
                     let newLines = chunk.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
                     self.activityLines.append(contentsOf: newLines)
@@ -146,7 +162,9 @@ final class AppModel: ObservableObject {
         }
         do {
             let result = try await EngineRunner.shared.run([
-                "resolve-review", "--plan", plan,
+                "resolve-review",
+                "--state-dir", item.stateDir,
+                "--plan", plan,
                 "--relpath", item.relpath,
                 "--resolution", "KEEP_AS_IS",
                 "--note", "Reviewed in Veronica.app; preserve original.",
@@ -174,7 +192,9 @@ final class AppModel: ObservableObject {
 
         do {
             let result = try await EngineRunner.shared.run([
-                "resolve-review", "--plan", plan,
+                "resolve-review",
+                "--state-dir", item.stateDir,
+                "--plan", plan,
                 "--relpath", item.relpath,
                 "--resolution", "PROCESS_NORMALLY",
                 "--note", "Reviewed in Veronica.app; allow normal policy evaluation.",
@@ -198,8 +218,7 @@ final class AppModel: ObservableObject {
     }
 
     func revealReview(_ item: ReviewItem) {
-        guard let root = snapshot?.archiveRoot else { return }
-        reveal(URL(fileURLWithPath: root).appendingPathComponent(item.relpath).path)
+        reveal(URL(fileURLWithPath: item.root).appendingPathComponent(item.relpath).path)
     }
 
     func setDeveloperMode(_ enabled: Bool) {
