@@ -115,7 +115,7 @@ The repository includes:
 - reproducible `macos/project.yml` rather than a committed generated Xcode project;
 - scripts for engine synchronization, project generation, standalone-engine packaging, and release-readiness checks.
 
-A suitable local canonical checkout is any normal development directory, for example `~/Developer/veronica`.
+A suitable local canonical checkout is any normal development directory, for example `~/Developer/veronica-mac-app`.
 
 ## Existing installations
 
