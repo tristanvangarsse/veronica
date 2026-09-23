@@ -35,6 +35,78 @@ struct SettingsView: View {
                     }
                 }
 
+                GroupBox("File naming") {
+                    if let naming = model.snapshot?.filenamePolicy {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Toggle(
+                                "Standardize media filenames",
+                                isOn: Binding(
+                                    get: { naming.enabled },
+                                    set: { value in
+                                        Task {
+                                            await model.updateFilenamePolicy(enabled: value)
+                                        }
+                                    }
+                                )
+                            )
+
+                            Text("When enabled, eligible media is named using its resolved Veronica date followed by the existing filename.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            Divider()
+
+                            LabeledContent("Format") {
+                                Picker(
+                                    "Format",
+                                    selection: Binding(
+                                        get: { naming.dateFormat },
+                                        set: { value in
+                                            Task {
+                                                await model.updateFilenamePolicy(dateFormat: value)
+                                            }
+                                        }
+                                    )
+                                ) {
+                                    Text("YYYY-MM-DD_filename.ext")
+                                        .tag("YYYY-MM-DD_")
+                                }
+                                .labelsHidden()
+                                .frame(width: 230)
+                            }
+
+                            LabeledContent("Maximum filename size") {
+                                Stepper(
+                                    value: Binding(
+                                        get: { naming.maxBytes },
+                                        set: { value in
+                                            Task {
+                                                await model.updateFilenamePolicy(maxBytes: value)
+                                            }
+                                        }
+                                    ),
+                                    in: 32...255,
+                                    step: 1
+                                ) {
+                                    Text("\(naming.maxBytes) UTF-8 bytes")
+                                        .monospacedDigit()
+                                }
+                            }
+
+                            Text("The limit includes the date prefix and file extension. Veronica truncates only the original filename portion and never splits a UTF-8 character. The filesystem safety ceiling is 255 bytes.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            LabeledContent("Example") {
+                                Text("2023-01-01_Screenshot 1.jpg")
+                                    .font(.system(.body, design: .monospaced))
+                            }
+                        }
+                        .padding(.vertical, 4)
+                        .disabled(model.isRunningAnnual)
+                    }
+                }
+
                 GroupBox("Veronica data") {
                     VStack(alignment: .leading, spacing: 10) {
                         LabeledContent("Location") { Text(model.snapshot?.stateDir ?? "—").textSelection(.enabled) }

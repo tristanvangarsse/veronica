@@ -168,4 +168,22 @@ final class EngineRunner {
             throw EngineRunnerError.invalidOutput(result.stderr.isEmpty ? result.stdout : result.stderr)
         }
     }
+
+    func configureFilenames(
+        enabled: Bool,
+        dateFormat: String,
+        maxBytes: Int
+    ) async throws {
+        let result = try await run([
+            "configure-filenames",
+            "--enabled", enabled ? "true" : "false",
+            "--date-format", dateFormat,
+            "--max-bytes", String(maxBytes)
+        ])
+        guard result.exitCode == 0 else {
+            throw EngineRunnerError.invalidOutput(
+                result.stderr.isEmpty ? result.stdout : result.stderr
+            )
+        }
+    }
 }

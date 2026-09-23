@@ -17,6 +17,7 @@ struct UISnapshot: Codable {
     let latestPlan: LatestPlan?
     let unresolvedReviews: [ReviewItem]
     let recentChanges: [RecentChange]
+    let filenamePolicy: FilenamePolicySettings
     let preflight: PreflightStatus
 
     enum CodingKeys: String, CodingKey {
@@ -33,6 +34,19 @@ struct UISnapshot: Codable {
         case latestPlan = "latest_plan"
         case unresolvedReviews = "unresolved_reviews"
         case recentChanges = "recent_changes"
+        case filenamePolicy = "filename_policy"
+    }
+}
+
+struct FilenamePolicySettings: Codable {
+    let enabled: Bool
+    let dateFormat: String
+    let maxBytes: Int
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case dateFormat = "date_format"
+        case maxBytes = "max_bytes"
     }
 }
 

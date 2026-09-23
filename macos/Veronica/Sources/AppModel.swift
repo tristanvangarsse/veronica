@@ -32,6 +32,29 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func updateFilenamePolicy(
+        enabled: Bool? = nil,
+        dateFormat: String? = nil,
+        maxBytes: Int? = nil
+    ) async {
+        guard let current = snapshot?.filenamePolicy else { return }
+
+        let nextEnabled = enabled ?? current.enabled
+        let nextDateFormat = dateFormat ?? current.dateFormat
+        let nextMaxBytes = maxBytes ?? current.maxBytes
+
+        do {
+            try await EngineRunner.shared.configureFilenames(
+                enabled: nextEnabled,
+                dateFormat: nextDateFormat,
+                maxBytes: nextMaxBytes
+            )
+            await refresh()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func chooseLibrary() async {
         let panel = NSOpenPanel()
         panel.title = "Choose Media Library"

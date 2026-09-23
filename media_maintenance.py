@@ -24,6 +24,7 @@ import hashlib
 import math
 import json
 import os
+import re
 import plistlib
 import shutil
 import sqlite3
@@ -58,6 +59,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "minimum_saving_percent": 10.0,
     "minimum_saving_bytes": 1048576,
     "stage_copy_personal_finder_tags": True,
+    "filename_standardization_enabled": True,
+    "filename_date_format": "YYYY-MM-DD_",
+    "filename_max_bytes": 180,
     "require_creation_date_before_commit": True,
     "creation_time_tolerance_seconds": 1.0,
     "video_aspect_ratio_tolerance": 0.005,
@@ -140,6 +144,52 @@ def save_product_settings(state_dir: Path, data: dict[str, Any]) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(str(tmp), str(path))
+
+
+def filename_product_settings(state_dir: Path) -> dict[str, Any]:
+    """Return validated effective filename settings for the native app."""
+    saved = load_product_settings(state_dir)
+
+    enabled = saved.get(
+        "filename_standardization_enabled",
+        DEFAULT_CONFIG["filename_standardization_enabled"],
+    )
+    date_format = saved.get(
+        "filename_date_format",
+        DEFAULT_CONFIG["filename_date_format"],
+    )
+    max_bytes = saved.get(
+        "filename_max_bytes",
+        DEFAULT_CONFIG["filename_max_bytes"],
+    )
+
+    enabled = bool(enabled)
+    date_format = str(date_format or "YYYY-MM-DD_")
+    if date_format not in _SUPPORTED_FILENAME_DATE_FORMATS:
+        date_format = "YYYY-MM-DD_"
+
+    try:
+        max_bytes = int(max_bytes)
+    except (TypeError, ValueError):
+        max_bytes = int(DEFAULT_CONFIG["filename_max_bytes"])
+
+    max_bytes = min(max(max_bytes, 32), 255)
+
+    return {
+        "enabled": enabled,
+        "date_format": date_format,
+        "max_bytes": max_bytes,
+    }
+
+
+def apply_product_filename_settings(cfg: dict[str, Any], state_dir: Path) -> dict[str, Any]:
+    """Overlay persisted Veronica filename preferences onto engine config."""
+    result = json.loads(json.dumps(cfg))
+    values = filename_product_settings(state_dir)
+    result["filename_standardization_enabled"] = values["enabled"]
+    result["filename_date_format"] = values["date_format"]
+    result["filename_max_bytes"] = values["max_bytes"]
+    return result
 
 
 def database_archive_root(state_dir: Path) -> Optional[Path]:
@@ -690,6 +740,155 @@ def historical_video_completion(con: sqlite3.Connection, asset_id: int, current_
         if current_quick_hash and oq and current_quick_hash == oq:
             return r
     return None
+
+
+_CANONICAL_DATE_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}_")
+_SUPPORTED_FILENAME_DATE_FORMATS = {"YYYY-MM-DD_"}
+
+
+def _truncate_utf8(value: str, max_bytes: int) -> str:
+    """Return the longest UTF-8-safe prefix no larger than max_bytes."""
+    if max_bytes < 0:
+        raise ValueError("max_bytes must be non-negative")
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    encoded = encoded[:max_bytes]
+    while encoded:
+        try:
+            return encoded.decode("utf-8")
+        except UnicodeDecodeError:
+            encoded = encoded[:-1]
+    return ""
+
+
+def canonical_media_filename(
+    relpath: str,
+    best_date: Optional[str],
+    target_extension: Optional[str],
+    cfg: dict[str, Any],
+) -> Optional[str]:
+    """Return the configured canonical filename for one media asset.
+
+    The resolved audit best_date is the only date authority here. Filename
+    normalization must not independently reinterpret filesystem metadata.
+    """
+    if not cfg.get("filename_standardization_enabled", True):
+        return None
+    if not best_date:
+        return None
+
+    date_format = str(cfg.get("filename_date_format") or "YYYY-MM-DD_")
+    if date_format not in _SUPPORTED_FILENAME_DATE_FORMATS:
+        raise ValueError(f"unsupported filename_date_format:{date_format}")
+
+    try:
+        date_value = dt.date.fromisoformat(str(best_date))
+    except ValueError:
+        return None
+
+    original = Path(relpath)
+    stem = _CANONICAL_DATE_PREFIX.sub("", original.stem, count=1)
+    stem = stem.strip()
+    if not stem:
+        stem = "media"
+
+    extension = target_extension if target_extension is not None else original.suffix
+    if extension and not extension.startswith("."):
+        extension = "." + extension
+
+    prefix = date_value.strftime("%Y-%m-%d") + "_"
+
+    configured_max = int(cfg.get("filename_max_bytes") or 180)
+    if configured_max < 32:
+        configured_max = 32
+
+    # APFS/HFS+ filename components have a hard ceiling. Keep our own safety
+    # ceiling at 255 UTF-8 bytes even when configuration requests something larger.
+    max_bytes = min(configured_max, 255)
+
+    fixed_bytes = len((prefix + extension).encode("utf-8"))
+    available_stem_bytes = max_bytes - fixed_bytes
+    if available_stem_bytes < 1:
+        raise ValueError("filename_max_bytes_too_small_for_date_and_extension")
+
+    stem = _truncate_utf8(stem, available_stem_bytes).rstrip()
+    if not stem:
+        stem = "media"
+        stem = _truncate_utf8(stem, available_stem_bytes)
+        if not stem:
+            raise ValueError("filename_max_bytes_too_small_for_safe_stem")
+
+    return prefix + stem + extension
+
+
+def apply_filename_policy(
+    item: dict[str, Any],
+    row: dict[str, Any],
+    cfg: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach canonical destination naming or turn an eligible skip into RENAME."""
+    if not cfg.get("filename_standardization_enabled", True):
+        return item
+
+    if item.get("operation") in {"REVIEW", "PRESERVE", "SKIP_TOO_NEW"}:
+        return item
+
+    if row.get("detected_kind") not in {"image", "video", "audio"}:
+        return item
+
+    best_date = row.get("best_date")
+    if not best_date:
+        return item
+
+    target_extension: Optional[str] = None
+    if item.get("operation") == "CONVERT_IMAGE":
+        fmt = str((item.get("target") or {}).get("format") or "").lower()
+        target_extension = ".png" if fmt == "png" else ".jpg"
+    elif item.get("operation") == "CONVERT_VIDEO":
+        target_extension = ".mp4"
+    elif item.get("operation") == "CONVERT_AUDIO":
+        target_extension = ".mp3"
+
+    filename = canonical_media_filename(
+        str(item["relpath"]),
+        str(best_date),
+        target_extension,
+        cfg,
+    )
+    if not filename:
+        return item
+
+    rel = Path(item["relpath"])
+    final_relpath = (rel.parent / filename).as_posix()
+
+    target = dict(item.get("target") or {})
+    target.update({
+        "final_relpath": final_relpath,
+        "filename_standardization": True,
+        "filename_date": str(best_date),
+        "filename_date_format": str(cfg.get("filename_date_format") or "YYYY-MM-DD_"),
+        "filename_max_bytes": min(int(cfg.get("filename_max_bytes") or 180), 255),
+    })
+    item["target"] = target
+
+    if final_relpath == item["relpath"]:
+        return item
+
+    if item.get("operation") in {"CONVERT_IMAGE", "CONVERT_VIDEO", "CONVERT_AUDIO"}:
+        # Conversion stays the primary operation. Commit installs the verified
+        # result directly at the canonical pathname.
+        return item
+
+    # Safe media which otherwise required no byte conversion still needs its
+    # naming policy applied.
+    if item.get("operation", "").startswith("SKIP"):
+        item["operation"] = "RENAME"
+        item["policy_version"] = "filename-standardization-v1"
+        item["reason"] = "filename_not_canonical"
+        item["executable"] = True
+
+    return item
 
 
 def make_item(row: dict[str, Any], asset_id: int, cfg: dict[str, Any]) -> dict[str, Any]:
@@ -2157,20 +2356,58 @@ def commit_one(args: argparse.Namespace, quiet: bool = False) -> dict[str, Any]:
     status, verification = verify_staged_output(source, staged_path, item, cfg)
     if status != "STAGED_VERIFIED" or verification.get("metadata_ready_for_commit") is not True:
         raise SystemExit(f"Refusing commit: staged output no longer verifies ({status})")
+    final_relpath = str((item.get("target") or {}).get("final_relpath") or relpath)
+    final_rel = Path(final_relpath)
+    if final_rel.is_absolute() or ".." in final_rel.parts:
+        raise SystemExit("Refusing commit: invalid final_relpath in frozen plan")
+    final_path = root / final_rel
+    if final_path != source and final_path.exists():
+        raise SystemExit(f"Refusing commit: destination already exists: {final_path}")
+
     original_sha = sha256_file(source)
     staged_sha = sha256_file(staged_path)
     commit_id = sha256_text(canonical_json({"staging_id": args.staging_id, "relpath": relpath, "started": now_iso()}))[:16]
     quarantine_dir = state_dir / "quarantine" / commit_id
     quarantine_path = quarantine_dir / relpath
     quarantine_path.parent.mkdir(parents=True, exist_ok=False)
+
     con = init_db(db_path, root)
+    con.row_factory = sqlite3.Row
+    asset_row = con.execute(
+        "SELECT asset_id FROM assets WHERE relpath=?",
+        (relpath,),
+    ).fetchone()
+    if not asset_row:
+        con.close()
+        raise SystemExit("Refusing commit: source asset is missing from the state database")
+    asset_id = int(asset_row["asset_id"])
+
+    if final_relpath != relpath:
+        conflict = con.execute(
+            "SELECT asset_id FROM assets WHERE relpath=? AND asset_id<>?",
+            (final_relpath, asset_id),
+        ).fetchone()
+        if conflict:
+            con.close()
+            raise SystemExit(
+                f"Refusing commit: destination relpath already belongs to another "
+                f"database asset: {final_relpath}"
+            )
+
     con.execute("INSERT INTO commits(commit_id,staging_id,plan_id,started_at,status,quarantine_dir) VALUES(?,?,?,?,?,?)",
                 (commit_id, args.staging_id, plan_id, now_iso(), "RUNNING", str(quarantine_dir)))
     con.commit()
-    final_tmp = source.parent / f".{source.name}.media-maintenance-{commit_id}.tmp"
+
+    final_tmp = final_path.parent / f".{final_path.name}.media-maintenance-{commit_id}.tmp"
     moved_to_quarantine = False
     installed = False
-    details: dict[str, Any] = {"precommit_verification": verification}
+    details: dict[str, Any] = {
+        "precommit_verification": verification,
+        "asset_id": asset_id,
+        "original_relpath": relpath,
+        "final_relpath": final_relpath,
+        "policy_version": item.get("policy_version"),
+    }
     try:
         # Atomic move of the original out of Media; never delete it.
         os.replace(source, quarantine_path)
@@ -2192,39 +2429,62 @@ def commit_one(args: argparse.Namespace, quiet: bool = False) -> dict[str, Any]:
             tag_ok, tag_msg, copied = True, "no_personal_tags", []
         if sha256_file(final_tmp) != staged_sha:
             raise RuntimeError("temp_copy_hash_mismatch")
-        os.replace(final_tmp, source)
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(final_tmp, final_path)
         installed = True
-        fsync_dir(source.parent)
-        final_sha = sha256_file(source)
+        fsync_dir(final_path.parent)
+        final_sha = sha256_file(final_path)
         if final_sha != staged_sha:
             raise RuntimeError("final_hash_mismatch")
-        final_status, final_ver = verify_staged_output(quarantine_path, source, item, cfg)
+        final_status, final_ver = verify_staged_output(quarantine_path, final_path, item, cfg)
         details["final_verification"] = final_ver
         if final_status != "STAGED_VERIFIED" or final_ver.get("metadata_ready_for_commit") is not True:
             raise RuntimeError(f"final_media_verification_failed:{final_status}")
-        # Record successful processing against the newly installed asset.
-        asset_row = con.execute("SELECT asset_id FROM assets WHERE relpath=?", (relpath,)).fetchone()
-        if asset_row:
-            con.execute("INSERT INTO processing_history(asset_id,policy_version,operation,status,processed_at,source_quick_hash,source_full_hash,output_quick_hash,output_full_hash,details_json) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                        (int(asset_row[0]), item.get("policy_version"), item.get("operation"), "COMMITTED", now_iso(), item.get("source_quick_hash"), original_sha, audit.quick_hash(source), final_sha, canonical_json({"commit_id": commit_id, "staging_id": args.staging_id})))
+
+        fst = final_path.stat()
+        con.execute(
+            "UPDATE assets SET relpath=?,size=?,mtime_ns=?,birth_ts=?,quick_hash=?,full_hash=?,"
+            "extension=?,active=1 WHERE asset_id=?",
+            (
+                final_relpath,
+                int(fst.st_size),
+                int(fst.st_mtime_ns),
+                getattr(fst, "st_birthtime", None),
+                audit.quick_hash(final_path),
+                final_sha,
+                final_path.suffix.lower(),
+                asset_id,
+            ),
+        )
+
+        con.execute("INSERT INTO processing_history(asset_id,policy_version,operation,status,processed_at,source_quick_hash,source_full_hash,output_quick_hash,output_full_hash,details_json) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (asset_id, item.get("policy_version"), item.get("operation"), "COMMITTED", now_iso(),
+                     item.get("source_quick_hash"), original_sha, audit.quick_hash(final_path), final_sha,
+                     canonical_json({"commit_id": commit_id, "staging_id": args.staging_id,
+                                     "original_relpath": relpath, "final_relpath": final_relpath})))
         con.execute("INSERT INTO commit_items(commit_id,relpath,operation,status,source_original_sha256,staged_sha256,final_sha256,quarantine_path,final_path,details_json) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                    (commit_id, relpath, item["operation"], "COMMITTED", original_sha, staged_sha, final_sha, str(quarantine_path), str(source), canonical_json(details)))
+                    (commit_id, relpath, item["operation"], "COMMITTED", original_sha, staged_sha, final_sha,
+                     str(quarantine_path), str(final_path), canonical_json(details)))
         report_path = state_dir / f"commit-{commit_id}.md"
         report_path.write_text("\n".join([
             "# Veronica Commit Report", "",
             f"- Tool version: `{VERSION}`", f"- Commit ID: `{commit_id}`", f"- Staging ID: `{args.staging_id}`",
-            f"- File: `{relpath}`", f"- Original quarantine: `{quarantine_path}`", f"- Installed file: `{source}`", "",
+            f"- Original file: `{relpath}`", f"- Installed file: `{final_relpath}`",
+            f"- Original quarantine: `{quarantine_path}`", "",
             "## Result", "", "- Status: **COMMITTED**", f"- Original SHA-256: `{original_sha}`", f"- Final SHA-256: `{final_sha}`",
             f"- Saving: **{verification.get('saving_percent',0):.1f}%**", "", "## Safety", "",
             "The original was not deleted. It remains in quarantine and can be restored with the rollback command.", ""
         ]), encoding="utf-8")
         con.execute("UPDATE commits SET completed_at=?,status='COMMITTED',report_path=? WHERE commit_id=?", (now_iso(), str(report_path), commit_id))
         con.commit()
-        result = {"status": "COMMITTED", "relpath": relpath, "commit_id": commit_id, "quarantine_path": str(quarantine_path), "report_path": str(report_path), "saving_percent": float(verification.get("saving_percent",0) or 0)}
+        result = {"status": "COMMITTED", "relpath": relpath, "final_relpath": final_relpath,
+                  "commit_id": commit_id, "quarantine_path": str(quarantine_path),
+                  "report_path": str(report_path),
+                  "saving_percent": float(verification.get("saving_percent",0) or 0)}
         if not quiet:
             print(f"Veronica {VERSION} commit")
             print("Mode: ONE-FILE COMMIT WITH QUARANTINE")
-            print(f"COMMITTED: {relpath}")
+            print(f"COMMITTED: {relpath} -> {final_relpath}")
             print(f"Original quarantine: {quarantine_path}")
             print(f"Report: {report_path}")
             print(f"Commit ID: {commit_id}")
@@ -2236,10 +2496,10 @@ def commit_one(args: argparse.Namespace, quiet: bool = False) -> dict[str, Any]:
             if final_tmp.exists():
                 final_tmp.unlink()
             if moved_to_quarantine and quarantine_path.exists():
-                if source.exists():
-                    failed_dir = state_dir / "failed-commit-output" / commit_id / relpath
+                if final_path.exists():
+                    failed_dir = state_dir / "failed-commit-output" / commit_id / final_relpath
                     failed_dir.parent.mkdir(parents=True, exist_ok=True)
-                    os.replace(source, failed_dir)
+                    os.replace(final_path, failed_dir)
                 os.replace(quarantine_path, source)
                 fsync_dir(source.parent)
                 restored_sha = sha256_file(source)
@@ -2249,7 +2509,8 @@ def commit_one(args: argparse.Namespace, quiet: bool = False) -> dict[str, Any]:
                     rollback_note += "; original_restored"
         finally:
             con.execute("INSERT OR REPLACE INTO commit_items(commit_id,relpath,operation,status,source_original_sha256,staged_sha256,quarantine_path,final_path,details_json) VALUES(?,?,?,?,?,?,?,?,?)",
-                        (commit_id, relpath, item["operation"], "FAILED_ROLLED_BACK", original_sha, staged_sha, str(quarantine_path), str(source), canonical_json({"error": rollback_note})))
+                        (commit_id, relpath, item["operation"], "FAILED_ROLLED_BACK", original_sha, staged_sha,
+                         str(quarantine_path), str(final_path), canonical_json({"error": rollback_note, **details})))
             con.execute("UPDATE commits SET completed_at=?,status='FAILED_ROLLED_BACK' WHERE commit_id=?", (now_iso(), commit_id))
             con.commit(); con.close()
         raise SystemExit(f"Commit failed safely: {rollback_note}")
@@ -2323,10 +2584,18 @@ def commit_one_video(args: argparse.Namespace, quiet: bool = False) -> dict[str,
     if verification.get("output_square_pixels") is not True:
         raise SystemExit("Refusing video commit: output is not square-pixel")
 
-    final_path = source if source.suffix.lower() == ".mp4" else source.with_suffix(".mp4")
+    planned_final_relpath = str(
+        (item.get("target") or {}).get("final_relpath")
+        or (Path(item["relpath"]).with_suffix(".mp4").as_posix())
+    )
+    final_rel = Path(planned_final_relpath)
+    if final_rel.is_absolute() or ".." in final_rel.parts:
+        raise SystemExit("Refusing video commit: invalid final_relpath in frozen plan")
+    final_relpath = final_rel.as_posix()
+    final_path = root / final_rel
+
     if final_path != source and final_path.exists():
         raise SystemExit(f"Refusing video commit: destination already exists: {final_path}")
-    final_relpath = final_path.relative_to(root).as_posix()
 
     original_sha = sha256_file(source)
     staged_sha = sha256_file(staged_path)
@@ -2449,6 +2718,327 @@ def commit_one_video(args: argparse.Namespace, quiet: bool = False) -> dict[str,
         try: con.close()
         except Exception: pass
 
+
+
+def commit_one_rename(args: argparse.Namespace, quiet: bool = False) -> dict[str, Any]:
+    if not args.yes:
+        raise SystemExit(
+            "Rename commit requires --yes. This command changes exactly one archive pathname "
+            "and quarantines the original path transactionally."
+        )
+
+    state_dir = Path(args.state_dir).expanduser().resolve()
+    db_path = state_dir / "media-maintenance.sqlite"
+    if not db_path.exists():
+        raise SystemExit(f"State database not found: {db_path}")
+
+    plan_path = Path(args.plan).expanduser().resolve()
+    plan = load_plan(plan_path)
+    root = Path(plan["root"]).resolve()
+
+    item = find_plan_item(plan, args.relpath)
+    if not item or item.get("operation") != "RENAME" or not item.get("executable"):
+        raise SystemExit("Plan item is not an executable rename")
+
+    source = root / item["relpath"]
+    final_relpath = str((item.get("target") or {}).get("final_relpath") or "")
+    if not final_relpath:
+        raise SystemExit("Rename plan item has no canonical final_relpath")
+
+    final_path = root / final_relpath
+    if final_path == source:
+        raise SystemExit("Rename destination is identical to source")
+    if final_path.exists():
+        raise SystemExit(f"Refusing rename commit: destination already exists: {final_path}")
+
+    ok, why = verify_source_against_item(root, item)
+    if not ok:
+        raise SystemExit(
+            f"Refusing rename commit: frozen plan is stale for {item['relpath']}: {why}"
+        )
+
+    if source.stat().st_dev != state_dir.stat().st_dev:
+        raise SystemExit(
+            "Rename commit requires Media and the state directory on the same filesystem "
+            "for atomic quarantine/rollback"
+        )
+
+    original_sha = sha256_file(source)
+    commit_id = sha256_text(
+        canonical_json(
+            {
+                "plan_id": plan["plan_id"],
+                "relpath": item["relpath"],
+                "operation": "RENAME",
+                "started": now_iso(),
+            }
+        )
+    )[:16]
+
+    quarantine_dir = state_dir / "quarantine" / commit_id
+    quarantine_path = quarantine_dir / item["relpath"]
+    quarantine_path.parent.mkdir(parents=True, exist_ok=False)
+
+    con = init_db(db_path, root)
+    con.row_factory = sqlite3.Row
+
+    asset_row = con.execute(
+        "SELECT asset_id FROM assets WHERE relpath=?",
+        (item["relpath"],),
+    ).fetchone()
+    if not asset_row:
+        con.close()
+        raise SystemExit("Refusing rename commit: source asset is missing from the state database")
+    asset_id = int(asset_row["asset_id"])
+
+    conflict = con.execute(
+        "SELECT asset_id FROM assets WHERE relpath=? AND asset_id<>?",
+        (final_relpath, asset_id),
+    ).fetchone()
+    if conflict:
+        con.close()
+        raise SystemExit(
+            f"Refusing rename commit: destination relpath already belongs to another "
+            f"database asset: {final_relpath}"
+        )
+
+    con.execute(
+        "INSERT INTO commits(commit_id,staging_id,plan_id,started_at,status,quarantine_dir) "
+        "VALUES(?,?,?,?,?,?)",
+        (
+            commit_id,
+            "rename-only",
+            plan["plan_id"],
+            now_iso(),
+            "RUNNING",
+            str(quarantine_dir),
+        ),
+    )
+    con.commit()
+
+    moved_to_quarantine = False
+    installed = False
+
+    details = {
+        "asset_id": asset_id,
+        "original_relpath": item["relpath"],
+        "final_relpath": final_relpath,
+        "policy_version": item.get("policy_version"),
+        "filename_standardization": True,
+    }
+
+    try:
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # First move original into Veronica quarantine atomically.
+        os.replace(source, quarantine_path)
+        moved_to_quarantine = True
+        fsync_dir(source.parent)
+        fsync_dir(quarantine_path.parent)
+
+        # Then atomically install the exact same bytes at the canonical pathname.
+        os.replace(quarantine_path, final_path)
+        installed = True
+        fsync_dir(final_path.parent)
+
+        final_sha = sha256_file(final_path)
+        if final_sha != original_sha:
+            raise RuntimeError("rename_final_hash_mismatch")
+
+        # Put a byte-identical rollback copy back into quarantine.
+        #
+        # copy2 preserves ordinary filesystem metadata where supported, but macOS
+        # creation time is restored explicitly so rollback does not silently replace
+        # the asset's original birth date with the time the quarantine copy was made.
+        quarantine_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(final_path, quarantine_path)
+
+        final_stat = final_path.stat()
+        creation_ok, creation_msg = set_creation_time(
+            quarantine_path,
+            getattr(final_stat, "st_birthtime", None),
+        )
+        if getattr(final_stat, "st_birthtime", None) is not None and not creation_ok:
+            raise RuntimeError(
+                f"rename_quarantine_creation_time_restore_failed:{creation_msg}"
+            )
+
+        fsync_file(quarantine_path)
+        fsync_dir(quarantine_path.parent)
+
+        if sha256_file(quarantine_path) != original_sha:
+            raise RuntimeError("rename_quarantine_copy_hash_mismatch")
+
+        fst = final_path.stat()
+        con.execute(
+            "UPDATE assets SET relpath=?,size=?,mtime_ns=?,birth_ts=?,quick_hash=?,full_hash=?,"
+            "extension=?,active=1 WHERE asset_id=?",
+            (
+                final_relpath,
+                int(fst.st_size),
+                int(fst.st_mtime_ns),
+                getattr(fst, "st_birthtime", None),
+                audit.quick_hash(final_path),
+                final_sha,
+                final_path.suffix.lower(),
+                asset_id,
+            ),
+        )
+
+        con.execute(
+            "INSERT INTO processing_history("
+            "asset_id,policy_version,operation,status,processed_at,"
+            "source_quick_hash,source_full_hash,output_quick_hash,output_full_hash,details_json"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                asset_id,
+                item.get("policy_version"),
+                "RENAME",
+                "COMMITTED",
+                now_iso(),
+                item.get("source_quick_hash"),
+                original_sha,
+                audit.quick_hash(final_path),
+                final_sha,
+                canonical_json(
+                    {
+                        "commit_id": commit_id,
+                        "original_relpath": item["relpath"],
+                        "final_relpath": final_relpath,
+                    }
+                ),
+            ),
+        )
+
+        con.execute(
+            "INSERT INTO commit_items("
+            "commit_id,relpath,operation,status,source_original_sha256,staged_sha256,"
+            "final_sha256,quarantine_path,final_path,details_json"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (
+                commit_id,
+                item["relpath"],
+                "RENAME",
+                "COMMITTED",
+                original_sha,
+                original_sha,
+                final_sha,
+                str(quarantine_path),
+                str(final_path),
+                canonical_json(details),
+            ),
+        )
+
+        report_path = state_dir / f"commit-{commit_id}.md"
+        report_path.write_text(
+            "\n".join(
+                [
+                    "# Veronica Rename Commit Report",
+                    "",
+                    f"- Tool version: `{VERSION}`",
+                    f"- Commit ID: `{commit_id}`",
+                    f"- Original file: `{item['relpath']}`",
+                    f"- Installed file: `{final_relpath}`",
+                    f"- Rollback quarantine: `{quarantine_path}`",
+                    "",
+                    "## Result",
+                    "",
+                    "- Status: **COMMITTED**",
+                    f"- SHA-256: `{final_sha}`",
+                    "",
+                    "## Safety",
+                    "",
+                    "The file contents were not converted. The pathname was standardized "
+                    "transactionally, and a byte-identical rollback copy remains in quarantine.",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        con.execute(
+            "UPDATE commits SET completed_at=?,status='COMMITTED',report_path=? WHERE commit_id=?",
+            (now_iso(), str(report_path), commit_id),
+        )
+        con.commit()
+
+        result = {
+            "status": "COMMITTED",
+            "relpath": item["relpath"],
+            "final_relpath": final_relpath,
+            "commit_id": commit_id,
+            "quarantine_path": str(quarantine_path),
+            "report_path": str(report_path),
+        }
+
+        if not quiet:
+            print(f"Veronica {VERSION} rename commit")
+            print("Mode: ONE-FILE ATOMIC RENAME WITH QUARANTINE")
+            print(f"COMMITTED: {item['relpath']} -> {final_relpath}")
+            print(f"Rollback quarantine: {quarantine_path}")
+            print(f"Report: {report_path}")
+            print(f"Commit ID: {commit_id}")
+
+        return result
+
+    except Exception as exc:
+        rollback_note = str(exc)
+
+        try:
+            # If canonical destination exists, put it back at the original path.
+            if final_path.exists():
+                if source.exists():
+                    failed = state_dir / "failed-commit-output" / commit_id / final_relpath
+                    failed.parent.mkdir(parents=True, exist_ok=True)
+                    os.replace(final_path, failed)
+                else:
+                    os.replace(final_path, source)
+
+            # If only the quarantine copy exists, restore from that.
+            if not source.exists() and quarantine_path.exists():
+                os.replace(quarantine_path, source)
+
+            if source.exists() and sha256_file(source) == original_sha:
+                rollback_note += "; original_restored"
+            else:
+                rollback_note += "; automatic_restore_hash_mismatch_or_missing"
+
+        finally:
+            con.execute(
+                "INSERT OR REPLACE INTO commit_items("
+                "commit_id,relpath,operation,status,source_original_sha256,staged_sha256,"
+                "quarantine_path,final_path,details_json"
+                ") VALUES(?,?,?,?,?,?,?,?,?)",
+                (
+                    commit_id,
+                    item["relpath"],
+                    "RENAME",
+                    "FAILED_ROLLED_BACK",
+                    original_sha,
+                    original_sha,
+                    str(quarantine_path),
+                    str(final_path),
+                    canonical_json({"error": rollback_note, **details}),
+                ),
+            )
+            con.execute(
+                "UPDATE commits SET completed_at=?,status='FAILED_ROLLED_BACK' WHERE commit_id=?",
+                (now_iso(), commit_id),
+            )
+            con.commit()
+
+        raise SystemExit(f"Rename commit failed safely: {rollback_note}")
+
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+
+
+def cmd_commit_rename(args: argparse.Namespace) -> int:
+    commit_one_rename(args, quiet=False)
+    return 0
 
 
 def cmd_commit_video(args: argparse.Namespace) -> int:
@@ -2724,6 +3314,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
     cfg = load_config(Path(args.config).expanduser() if args.config else None)
     state_dir = Path(args.state_dir).expanduser().resolve()
     state_dir.mkdir(parents=True, exist_ok=True)
+    cfg = apply_product_filename_settings(cfg, state_dir)
     run_date = dt.date.fromisoformat(args.run_date) if args.run_date else dt.date.today()
 
     auditor = audit.Auditor(root, cfg, run_date, state_dir, full_hashing=False, probe_media=True)
@@ -2782,6 +3373,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
             policy_row["action"] = "CANDIDATE"
 
         item = make_item(policy_row, asset_id, cfg)
+        item = apply_filename_policy(item, row, cfg)
 
         if process_normally is not None:
             item["target"] = {
@@ -2883,6 +3475,56 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
     # Plan ID is derived from the exact ordered decision payload, making it immutable/reproducible.
     items.sort(key=lambda x: x["relpath"])
+    # Detect canonical filename collisions before freezing the immutable plan.
+    #
+    # This catches:
+    # - two different source assets mapping to the same canonical destination;
+    # - a canonical destination already occupied by a different active asset.
+    #
+    # Collision handling is deliberately conservative: affected items become
+    # REVIEW and are never automatically renamed or overwritten.
+    planned_destinations: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        final_relpath = str((item.get("target") or {}).get("final_relpath") or "")
+        if not final_relpath or final_relpath == item.get("relpath"):
+            continue
+        planned_destinations.setdefault(final_relpath, []).append(item)
+
+    canonical_collision_paths: set[str] = set()
+
+    # Multiple planned items converging on one destination.
+    for final_relpath, grouped in planned_destinations.items():
+        if len(grouped) > 1:
+            canonical_collision_paths.add(final_relpath)
+
+    # Destination already occupied by a different active archive asset.
+    for final_relpath, grouped in planned_destinations.items():
+        source_relpaths = {str(i.get("relpath")) for i in grouped}
+        occupied = con.execute(
+            "SELECT relpath FROM assets WHERE active=1 AND relpath=?",
+            (final_relpath,),
+        ).fetchone()
+        if occupied is not None and str(occupied["relpath"]) not in source_relpaths:
+            canonical_collision_paths.add(final_relpath)
+
+    if canonical_collision_paths:
+        for item in items:
+            final_relpath = str((item.get("target") or {}).get("final_relpath") or "")
+            if final_relpath not in canonical_collision_paths:
+                continue
+
+            target = dict(item.get("target") or {})
+            target["filename_collision"] = True
+            target["filename_collision_destination"] = final_relpath
+
+            item.update(
+                operation="REVIEW",
+                policy_version=None,
+                executable=False,
+                reason="filename_collision",
+                target=target,
+            )
+
     plan_core = {
         "schema_version": 1,
         "tool_version": VERSION,
@@ -3234,6 +3876,38 @@ def cmd_resolve_review(args: argparse.Namespace) -> int:
         con.close()
 
 
+def cmd_configure_filenames(args: argparse.Namespace) -> int:
+    """Persist the user-visible filename policy without modifying media."""
+    state_dir = Path(args.state_dir).expanduser().resolve()
+
+    if args.enabled not in {"true", "false"}:
+        raise SystemExit("--enabled must be true or false")
+
+    if args.date_format not in _SUPPORTED_FILENAME_DATE_FORMATS:
+        raise SystemExit(
+            "Unsupported filename date format. "
+            "This build supports: " + ", ".join(sorted(_SUPPORTED_FILENAME_DATE_FORMATS))
+        )
+
+    max_bytes = int(args.max_bytes)
+    if max_bytes < 32 or max_bytes > 255:
+        raise SystemExit("--max-bytes must be between 32 and 255")
+
+    current = load_product_settings(state_dir)
+    current["filename_standardization_enabled"] = args.enabled == "true"
+    current["filename_date_format"] = args.date_format
+    current["filename_max_bytes"] = max_bytes
+    current["filename_settings_updated_at"] = now_iso()
+    save_product_settings(state_dir, current)
+
+    print(json.dumps(
+        filename_product_settings(state_dir),
+        ensure_ascii=False,
+        sort_keys=True,
+    ))
+    return 0
+
+
 def cmd_configure_library(args: argparse.Namespace) -> int:
     state_dir = Path(args.state_dir).expanduser().resolve()
     root = Path(args.root).expanduser().resolve()
@@ -3297,6 +3971,7 @@ def cmd_ui_snapshot(args: argparse.Namespace) -> int:
             "latest_plan": None,
             "unresolved_reviews": [],
             "recent_changes": [],
+            "filename_policy": filename_product_settings(state_dir),
             "preflight": dependency_status(),
         }
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
@@ -3407,6 +4082,7 @@ def cmd_ui_snapshot(args: argparse.Namespace) -> int:
         "latest_plan": latest_plan,
         "unresolved_reviews": unresolved_reviews,
         "recent_changes": recent_changes,
+        "filename_policy": filename_product_settings(state_dir),
         "preflight": dependency_status(),
     }
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
@@ -3505,7 +4181,8 @@ def _annual_write_report(state_dir: Path, plan: dict[str, Any], status: str, sta
         for rec in batch_records:
             lines.append(
                 f"- staging `{rec['staging_id']}`: staged_verified={rec.get('verified',0)}, "
-                f"keep_original={rec.get('kept',0)}, committed_images={rec.get('committed_images',0)}, "
+                f"keep_original={rec.get('kept',0)}, committed_renames={rec.get('committed_renames',0)}, "
+                f"committed_images={rec.get('committed_images',0)}, "
                 f"committed_videos={rec.get('committed_videos',0)}, "
                 f"committed_saving={int(rec.get('committed_saving_bytes',0) or 0)/1024**2:.1f} MiB"
             )
@@ -3533,6 +4210,8 @@ def cmd_annual(args: argparse.Namespace) -> int:
     """One-command yearly controller built only from the existing proven primitives."""
     if not args.yes:
         raise SystemExit("Annual maintenance can commit verified media. Re-run with --yes to acknowledge bounded commit operations.")
+    if args.rename_batch < 1 or args.rename_batch > 250:
+        raise SystemExit("--rename-batch must be between 1 and 250")
     if args.image_batch < 1 or args.image_batch > 250:
         raise SystemExit("--image-batch must be between 1 and 250")
     if args.video_batch < 1 or args.video_batch > 25:
@@ -3605,7 +4284,10 @@ def cmd_annual(args: argparse.Namespace) -> int:
         return 2
 
     remaining = _annual_remaining(plan, state_dir)
-    unsupported = [i for i in remaining if i.get("operation") not in {"CONVERT_IMAGE", "CONVERT_VIDEO"}]
+    unsupported = [
+        i for i in remaining
+        if i.get("operation") not in {"RENAME", "CONVERT_IMAGE", "CONVERT_VIDEO"}
+    ]
     if unsupported:
         kinds = Counter(i.get("operation") for i in unsupported)
         msg = "Executable operation(s) are not supported by the annual controller: " + ", ".join(f"{k}={v}" for k,v in kinds.items())
@@ -3621,10 +4303,112 @@ def cmd_annual(args: argparse.Namespace) -> int:
         if guard > 10000:
             raise SystemExit("Annual controller safety guard triggered: too many batches")
         counts = Counter(i.get("operation") for i in remaining)
+
+        # Filename-only normalization is its own bounded transaction class.
+        # Each item uses the same per-file quarantine + rollback guarantees as
+        # conversion commits, but does not enter media conversion staging.
+        rename_items = [
+            i for i in remaining
+            if i.get("operation") == "RENAME"
+        ][:args.rename_batch]
+
+        if rename_items:
+            print(
+                f"\nAnnual batch {guard}: "
+                f"remaining renames={counts.get('RENAME',0)} "
+                f"images={counts.get('CONVERT_IMAGE',0)} "
+                f"videos={counts.get('CONVERT_VIDEO',0)}"
+            )
+            emit_event(
+                "batch_started",
+                batch_number=guard,
+                remaining_renames=counts.get("RENAME", 0),
+                remaining_images=counts.get("CONVERT_IMAGE", 0),
+                remaining_videos=counts.get("CONVERT_VIDEO", 0),
+            )
+
+            rec = {
+                "staging_id": "rename-only",
+                "verified": 0,
+                "kept": 0,
+                "committed_renames": 0,
+                "committed_images": 0,
+                "committed_videos": 0,
+                "committed_saving_bytes": 0,
+            }
+
+            for idx, rename_item in enumerate(rename_items, 1):
+                relpath = str(rename_item["relpath"])
+                rename_args = argparse.Namespace(
+                    plan=str(plan_path),
+                    state_dir=str(state_dir),
+                    relpath=relpath,
+                    yes=True,
+                )
+                try:
+                    result = commit_one_rename(rename_args, quiet=True)
+                except SystemExit as exc:
+                    report = _annual_write_report(
+                        state_dir,
+                        plan,
+                        "STOPPED_COMMIT_FAILURE",
+                        started_at,
+                        batches + [rec],
+                        f"Rename commit failed safely for `{relpath}`: {exc}",
+                    )
+                    print(f"STOP: rename commit failed safely for {relpath}: {exc}")
+                    print(f"Annual report: {report}")
+                    return 2
+
+                rec["committed_renames"] += 1
+                print(
+                    f"[{idx}/{len(rename_items)}] RENAMED "
+                    f"{relpath} -> {result['final_relpath']}"
+                )
+                emit_event(
+                    "commit_item",
+                    media="rename",
+                    index=idx,
+                    total=len(rename_items),
+                    relpath=relpath,
+                    final_relpath=result["final_relpath"],
+                    status="COMMITTED",
+                    commit_id=result["commit_id"],
+                )
+
+            batches.append(rec)
+
+            new_remaining = _annual_remaining(plan, state_dir)
+            if len(new_remaining) >= len(remaining):
+                report = _annual_write_report(
+                    state_dir,
+                    plan,
+                    "STOPPED_NO_PROGRESS",
+                    started_at,
+                    batches,
+                    "A bounded rename batch completed without reducing remaining executable work.",
+                )
+                print(f"STOP: annual controller made no progress. Annual report: {report}")
+                return 2
+
+            remaining = new_remaining
+            continue
+
         max_images = min(args.image_batch, counts.get("CONVERT_IMAGE", 0))
         max_videos = min(args.video_batch, counts.get("CONVERT_VIDEO", 0))
-        print(f"\nAnnual batch {guard}: remaining images={counts.get('CONVERT_IMAGE',0)} videos={counts.get('CONVERT_VIDEO',0)}")
-        emit_event("batch_started", batch_number=guard, remaining_images=counts.get("CONVERT_IMAGE",0), remaining_videos=counts.get("CONVERT_VIDEO",0))
+        print(
+            f"\nAnnual batch {guard}: "
+            f"remaining renames={counts.get('RENAME',0)} "
+            f"images={counts.get('CONVERT_IMAGE',0)} "
+            f"videos={counts.get('CONVERT_VIDEO',0)}"
+        )
+        emit_event(
+            "batch_started",
+            batch_number=guard,
+            remaining_renames=counts.get("RENAME", 0),
+            remaining_images=counts.get("CONVERT_IMAGE", 0),
+            remaining_videos=counts.get("CONVERT_VIDEO", 0),
+        )
         stage_args = argparse.Namespace(
             plan=str(plan_path), state_dir=str(state_dir), config=args.config,
             max_images=max_images, max_videos=max_videos, max_audio=0,
@@ -3714,6 +4498,7 @@ def main() -> int:
     pa.add_argument("--state-dir", default=DEFAULT_STATE_DIR)
     pa.add_argument("--config")
     pa.add_argument("--run-date", help="YYYY-MM-DD; defaults to today")
+    pa.add_argument("--rename-batch", type=int, default=250, help="bounded filename-only rename window; max 250")
     pa.add_argument("--image-batch", type=int, default=250, help="bounded image staging/commit window; max 250")
     pa.add_argument("--video-batch", type=int, default=25, help="bounded video staging/commit window; max 25")
     pa.add_argument("--yes", action="store_true", help="required acknowledgement that verified media may be committed")
@@ -3758,6 +4543,11 @@ def main() -> int:
     pcb.add_argument("--max-items", type=int, default=25)
     pcb.add_argument("--relpath", action="append", help="optional exact staged relpath; repeat to choose explicit files")
     pcb.add_argument("--yes", action="store_true", help="required explicit acknowledgement")
+    pcr = sub.add_parser("commit-rename", help="commit exactly one canonical filename rename with quarantine and rollback support")
+    pcr.add_argument("--plan", required=True, help="path to frozen plan JSON")
+    pcr.add_argument("--state-dir", required=True)
+    pcr.add_argument("--relpath", required=True, help="exact original relpath from the frozen plan")
+    pcr.add_argument("--yes", action="store_true", help="required explicit acknowledgement")
     prb = sub.add_parser("rollback", help="restore the quarantined original for one committed item")
     prb.add_argument("--commit-id", required=True)
     prb.add_argument("--state-dir", required=True)
@@ -3769,6 +4559,12 @@ def main() -> int:
     prr.add_argument("--resolution", choices=["KEEP_AS_IS", "PROCESS_NORMALLY"], required=True)
     prr.add_argument("--note", help="optional human rationale stored in SQLite audit history")
     prr.add_argument("--yes", action="store_true", help="required explicit acknowledgement of the durable database decision")
+    pfn = sub.add_parser("configure-filenames", help="store Veronica filename-standardization preferences")
+    pfn.add_argument("--state-dir", default=DEFAULT_STATE_DIR)
+    pfn.add_argument("--enabled", choices=["true", "false"], required=True)
+    pfn.add_argument("--date-format", default="YYYY-MM-DD_")
+    pfn.add_argument("--max-bytes", type=int, required=True)
+
     pcfg = sub.add_parser("configure-library", help="store the selected media library in Veronica Application Support")
     pcfg.add_argument("--state-dir", default=DEFAULT_STATE_DIR)
     pcfg.add_argument("--root", required=True)
@@ -3809,8 +4605,10 @@ def main() -> int:
     if args.cmd == "commit-video": return cmd_commit_video(args)
     if args.cmd == "commit-video-batch": return cmd_commit_video_batch(args)
     if args.cmd == "commit-batch": return cmd_commit_batch(args)
+    if args.cmd == "commit-rename": return cmd_commit_rename(args)
     if args.cmd == "rollback": return cmd_rollback(args)
     if args.cmd == "resolve-review": return cmd_resolve_review(args)
+    if args.cmd == "configure-filenames": return cmd_configure_filenames(args)
     if args.cmd == "configure-library": return cmd_configure_library(args)
     if args.cmd == "preflight": return cmd_preflight(args)
     if args.cmd == "ui-snapshot": return cmd_ui_snapshot(args)
