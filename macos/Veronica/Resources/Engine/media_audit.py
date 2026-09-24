@@ -360,6 +360,7 @@ class Auditor:
         self.config = config
         self.run_date = run_date
         self.cutoff = calendar_years_before(run_date, int(config.get("archive_age_years", 2)))
+        self.date_scope = dict(config.get("date_scope") or {"mode": "legacy"})
         self.output_dir = output_dir.resolve()
         self.full_hashing = full_hashing
         self.probe_media = probe_media
@@ -478,12 +479,30 @@ class Auditor:
         if kind not in {"image", "video", "audio"}:
             return Decision("YELLOW", "REVIEW", f"unclassified_content:{kind}")
 
-        # Ordinary media that is too new is not part of this maintenance cycle. This check
-        # intentionally precedes animation/probe diagnostics so recent media does not create
-        # noise, while masters/project files above remain protected regardless of age.
+        # Date scope is evaluated before media diagnostics so files outside the selected
+        # scope do not create review noise. Unknown/conflicting dates deliberately continue
+        # into the normal review path because Veronica cannot safely determine scope.
         if row.get("best_date") and row.get("date_confidence") not in {"CONFLICT", "UNKNOWN"}:
-            if dt.date.fromisoformat(row["best_date"]) >= self.cutoff:
-                return Decision("GREEN", "SKIP", "too_new")
+            best_date = dt.date.fromisoformat(row["best_date"])
+            scope_mode = str(self.date_scope.get("mode") or "legacy")
+
+            if scope_mode == "legacy":
+                if best_date >= self.cutoff:
+                    return Decision("GREEN", "SKIP", "date_scope_excluded")
+            elif scope_mode == "within":
+                start = dt.date.fromisoformat(str(self.date_scope["start"]))
+                end = dt.date.fromisoformat(str(self.date_scope["end"]))
+                if not (start <= best_date <= end):
+                    return Decision("GREEN", "SKIP", "date_scope_excluded")
+            elif scope_mode == "outside":
+                start = dt.date.fromisoformat(str(self.date_scope["start"]))
+                end = dt.date.fromisoformat(str(self.date_scope["end"]))
+                if start <= best_date <= end:
+                    return Decision("GREEN", "SKIP", "date_scope_excluded")
+            elif scope_mode == "all":
+                pass
+            else:
+                return Decision("YELLOW", "REVIEW", "invalid_date_scope")
 
         if row.get("size") == 0:
             return Decision("YELLOW", "REVIEW", "empty_file")

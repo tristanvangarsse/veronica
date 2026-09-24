@@ -55,6 +55,23 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func updateDateScope(
+        mode: String,
+        start: String? = nil,
+        end: String? = nil
+    ) async {
+        do {
+            try await EngineRunner.shared.configureDateScope(
+                mode: mode,
+                start: start,
+                end: end
+            )
+            await refresh()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func addScanFolders() async {
         let panel = NSOpenPanel()
         panel.title = "Add Folders"

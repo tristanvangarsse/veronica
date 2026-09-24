@@ -185,6 +185,32 @@ final class EngineRunner {
         }
     }
 
+    func configureDateScope(
+        mode: String,
+        start: String?,
+        end: String?
+    ) async throws {
+        var arguments = [
+            "configure-date-scope",
+            "--mode", mode
+        ]
+
+        if let start {
+            arguments += ["--start", start]
+        }
+
+        if let end {
+            arguments += ["--end", end]
+        }
+
+        let result = try await run(arguments)
+        guard result.exitCode == 0 else {
+            throw EngineRunnerError.invalidOutput(
+                result.stderr.isEmpty ? result.stdout : result.stderr
+            )
+        }
+    }
+
     func configureFilenames(
         enabled: Bool,
         dateFormat: String,

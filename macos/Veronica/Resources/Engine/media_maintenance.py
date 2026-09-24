@@ -192,6 +192,69 @@ def apply_product_filename_settings(cfg: dict[str, Any], state_dir: Path) -> dic
     return result
 
 
+def date_scope_product_settings(
+    state_dir: Path,
+    run_date: Optional[dt.date] = None,
+) -> dict[str, Any]:
+    """Return the validated effective date-scope policy.
+
+    Existing installations with no explicit date-scope setting retain the
+    historical annual policy until the user chooses a new mode.
+    """
+    saved = load_product_settings(state_dir)
+    mode = str(saved.get("date_scope_mode") or "legacy")
+
+    if mode not in {"legacy", "all", "within", "outside"}:
+        mode = "legacy"
+
+    start = saved.get("date_scope_start")
+    end = saved.get("date_scope_end")
+
+    if mode in {"within", "outside"}:
+        try:
+            start_date = dt.date.fromisoformat(str(start))
+            end_date = dt.date.fromisoformat(str(end))
+        except (TypeError, ValueError):
+            mode = "legacy"
+            start = None
+            end = None
+        else:
+            if start_date > end_date:
+                mode = "legacy"
+                start = None
+                end = None
+            else:
+                start = start_date.isoformat()
+                end = end_date.isoformat()
+
+    if mode == "legacy":
+        effective_run_date = run_date or dt.date.today()
+        cutoff = _annual_calendar_cutoff(effective_run_date)
+        return {
+            "mode": "legacy",
+            "start": None,
+            "end": str(cutoff - dt.timedelta(days=1)),
+            "legacy": True,
+        }
+
+    return {
+        "mode": mode,
+        "start": start if mode != "all" else None,
+        "end": end if mode != "all" else None,
+        "legacy": False,
+    }
+
+
+def apply_product_date_scope_settings(
+    cfg: dict[str, Any],
+    state_dir: Path,
+    run_date: dt.date,
+) -> dict[str, Any]:
+    result = json.loads(json.dumps(cfg))
+    result["date_scope"] = date_scope_product_settings(state_dir, run_date)
+    return result
+
+
 def database_archive_root(state_dir: Path) -> Optional[Path]:
     db = state_dir / "media-maintenance.sqlite"
     if not db.exists():
@@ -295,6 +358,13 @@ def prepare_scan_folder_state(base_state_dir: Path, folder: Path) -> Path:
     child["filename_standardization_enabled"] = parent_filename["enabled"]
     child["filename_date_format"] = parent_filename["date_format"]
     child["filename_max_bytes"] = parent_filename["max_bytes"]
+
+    parent_settings = load_product_settings(base_state_dir)
+    if "date_scope_mode" in parent_settings:
+        child["date_scope_mode"] = parent_settings.get("date_scope_mode")
+        child["date_scope_start"] = parent_settings.get("date_scope_start")
+        child["date_scope_end"] = parent_settings.get("date_scope_end")
+
     child["managed_by_multi_folder"] = True
     child["parent_state_dir"] = str(base_state_dir)
     save_product_settings(folder_state, child)
@@ -3400,6 +3470,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
     state_dir.mkdir(parents=True, exist_ok=True)
     cfg = apply_product_filename_settings(cfg, state_dir)
     run_date = dt.date.fromisoformat(args.run_date) if args.run_date else dt.date.today()
+    cfg = apply_product_date_scope_settings(cfg, state_dir, run_date)
 
     auditor = audit.Auditor(root, cfg, run_date, state_dir, full_hashing=False, probe_media=True)
     cutoff_override = getattr(args, "cutoff_override", None)
@@ -3407,7 +3478,20 @@ def cmd_plan(args: argparse.Namespace) -> int:
         auditor.cutoff = dt.date.fromisoformat(cutoff_override)
     print(f"Veronica {VERSION} planner")
     print(f"Root: {root}")
+    scope = dict(cfg.get("date_scope") or {})
+    scope_mode = scope.get("mode", "legacy")
+
+    # Compatibility output retained for existing tests/tools.
     print(f"Cutoff: files before {auditor.cutoff.isoformat()}")
+
+    if scope_mode == "legacy":
+        print(f"Date scope: legacy annual policy, through {scope.get('end')}")
+    elif scope_mode == "all":
+        print("Date scope: all dates")
+    elif scope_mode == "within":
+        print(f"Date scope: only within {scope.get('start')} through {scope.get('end')}")
+    elif scope_mode == "outside":
+        print(f"Date scope: outside {scope.get('start')} through {scope.get('end')}")
     print("Mode: PLAN ONLY (media files will not be changed)")
     auditor.walk()
 
@@ -3616,6 +3700,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
         "run_id": run_id,
         "run_date": run_date.isoformat(),
         "cutoff": auditor.cutoff.isoformat(),
+        "date_scope": dict(cfg.get("date_scope") or {}),
         "files_inventoried": len(auditor.rows),
         "ignored_files": dict(ignored_counts),
         "legacy": {"v1_assets": legacy_v1, "v2_assets": legacy_v2},
@@ -3986,6 +4071,48 @@ def cmd_configure_filenames(args: argparse.Namespace) -> int:
 
     print(json.dumps(
         filename_product_settings(state_dir),
+        ensure_ascii=False,
+        sort_keys=True,
+    ))
+    return 0
+
+
+def cmd_configure_date_scope(args: argparse.Namespace) -> int:
+    """Persist the date range used to decide which media is eligible."""
+    state_dir = Path(args.state_dir).expanduser().resolve()
+    mode = str(args.mode)
+
+    if mode not in {"all", "within", "outside"}:
+        raise SystemExit("--mode must be all, within, or outside")
+
+    start = args.start
+    end = args.end
+
+    if mode in {"within", "outside"}:
+        if not start or not end:
+            raise SystemExit("--start and --end are required for within/outside modes")
+        try:
+            start_date = dt.date.fromisoformat(start)
+            end_date = dt.date.fromisoformat(end)
+        except ValueError:
+            raise SystemExit("--start and --end must use YYYY-MM-DD")
+        if start_date > end_date:
+            raise SystemExit("--start must be on or before --end")
+        start = start_date.isoformat()
+        end = end_date.isoformat()
+    else:
+        start = None
+        end = None
+
+    current = load_product_settings(state_dir)
+    current["date_scope_mode"] = mode
+    current["date_scope_start"] = start
+    current["date_scope_end"] = end
+    current["date_scope_updated_at"] = now_iso()
+    save_product_settings(state_dir, current)
+
+    print(json.dumps(
+        date_scope_product_settings(state_dir),
         ensure_ascii=False,
         sort_keys=True,
     ))
@@ -4388,6 +4515,7 @@ def cmd_ui_snapshot(args: argparse.Namespace) -> int:
         "unresolved_reviews": unresolved_reviews,
         "recent_changes": recent_changes,
         "filename_policy": filename_product_settings(state_dir),
+        "date_scope": date_scope_product_settings(state_dir, today),
         "preflight": dependency_status(),
     }
 
@@ -4614,11 +4742,27 @@ def cmd_annual(args: argparse.Namespace) -> int:
     annual_run_date = dt.date.fromisoformat(args.run_date) if args.run_date else dt.date.today()
     annual_cutoff = _annual_calendar_cutoff(annual_run_date)
 
-    print(f"Veronica {VERSION} annual maintenance")
+    scope = date_scope_product_settings(state_dir, annual_run_date)
+
+    print(f"Veronica {VERSION} maintenance")
     print("Mode: ONE-COMMAND CONTROLLER WITH BOUNDED STAGING/COMMIT WINDOWS")
     print("Safety: any new REVIEW item or staging/commit anomaly stops automation")
-    print(f"Annual calendar policy: include media through {annual_cutoff.year - 1}-12-31")
-    emit_event("annual_cutoff", run_date=annual_run_date.isoformat(), cutoff=annual_cutoff.isoformat(), include_through=f"{annual_cutoff.year - 1}-12-31")
+
+    if scope["mode"] == "legacy":
+        print(f"Date scope: current annual policy through {scope['end']}")
+    elif scope["mode"] == "all":
+        print("Date scope: all dates")
+    elif scope["mode"] == "within":
+        print(f"Date scope: only within {scope['start']} through {scope['end']}")
+    elif scope["mode"] == "outside":
+        print(f"Date scope: outside {scope['start']} through {scope['end']}")
+
+    emit_event(
+        "annual_cutoff",
+        run_date=annual_run_date.isoformat(),
+        cutoff=annual_cutoff.isoformat(),
+        include_through=scope.get("end"),
+    )
 
     plan_args = argparse.Namespace(
         root=str(root), state_dir=str(state_dir), config=args.config,
@@ -4948,6 +5092,12 @@ def main() -> int:
     pfn.add_argument("--date-format", default="YYYY-MM-DD_")
     pfn.add_argument("--max-bytes", type=int, required=True)
 
+    pscope = sub.add_parser("configure-date-scope", help="store Veronica date-scope preferences")
+    pscope.add_argument("--state-dir", default=DEFAULT_STATE_DIR)
+    pscope.add_argument("--mode", choices=["all", "within", "outside"], required=True)
+    pscope.add_argument("--start", help="inclusive YYYY-MM-DD start date")
+    pscope.add_argument("--end", help="inclusive YYYY-MM-DD end date")
+
     pfolders = sub.add_parser("configure-folders", help="add or remove folders Veronica should scan")
     pfolders.add_argument("--state-dir", default=DEFAULT_STATE_DIR)
     pfolders.add_argument("--add", action="append", default=[])
@@ -4998,6 +5148,7 @@ def main() -> int:
     if args.cmd == "rollback": return cmd_rollback(args)
     if args.cmd == "resolve-review": return cmd_resolve_review(args)
     if args.cmd == "configure-filenames": return cmd_configure_filenames(args)
+    if args.cmd == "configure-date-scope": return cmd_configure_date_scope(args)
     if args.cmd == "configure-folders": return cmd_configure_folders(args)
     if args.cmd == "configure-library": return cmd_configure_library(args)
     if args.cmd == "preflight": return cmd_preflight(args)

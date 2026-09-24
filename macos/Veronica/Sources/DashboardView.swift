@@ -43,8 +43,8 @@ struct DashboardView: View {
             Button("Run Annual Maintenance") { Task { await model.runAnnual() } }
             Button("Cancel", role: .cancel) { }
         } message: {
-            if let annual = model.snapshot?.annual {
-                Text("Veronica will scan your configured folders and consider media through \(annual.includeThrough). New review items or any verification anomaly will stop automation before unsafe work is committed.")
+            if let scope = model.snapshot?.dateScope {
+                Text("Veronica will scan your configured folders using this date scope: \(scope.summary). New review items or any verification anomaly will stop automation before unsafe work is committed.")
             } else {
                 Text("Veronica will scan your configured folders and stop safely if anything needs review.")
             }
@@ -55,8 +55,8 @@ struct DashboardView: View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Veronica").font(.largeTitle.bold())
-                if let annual = model.snapshot?.annual {
-                    Text("Annual scope: media through \(annual.includeThrough)")
+                if let scope = model.snapshot?.dateScope {
+                    Text("Date scope: \(scope.summary)")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -74,11 +74,14 @@ struct DashboardView: View {
 
     @ViewBuilder
     private func planCard(_ s: UISnapshot) -> some View {
-        GroupBox("Latest annual plan") {
+        GroupBox("Latest maintenance plan") {
             if let plan = s.latestPlan {
                 Grid(alignment: .leading, horizontalSpacing: 28, verticalSpacing: 9) {
                     GridRow { Text("Run date").foregroundStyle(.secondary); Text(plan.runDate) }
-                    GridRow { Text("Includes").foregroundStyle(.secondary); Text("media before \(plan.cutoff)") }
+                    GridRow {
+                        Text("Date scope").foregroundStyle(.secondary)
+                        Text(s.dateScope.summary)
+                    }
                     GridRow { Text("Planned conversions").foregroundStyle(.secondary); Text(plan.executableCount.formatted()) }
                     GridRow {
                         Text("Still waiting").foregroundStyle(.secondary)
@@ -89,7 +92,7 @@ struct DashboardView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 4)
             } else {
-                Text(s.databaseExists ? "No annual plan has been created yet." : "Ready for your first annual scan.").foregroundStyle(.secondary)
+                Text(s.databaseExists ? "No maintenance plan has been created yet." : "Ready for your first scan.").foregroundStyle(.secondary)
             }
         }
     }

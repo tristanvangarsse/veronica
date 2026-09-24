@@ -20,6 +20,7 @@ struct UISnapshot: Codable {
     let unresolvedReviews: [ReviewItem]
     let recentChanges: [RecentChange]
     let filenamePolicy: FilenamePolicySettings
+    let dateScope: DateScopeSettings
     let preflight: PreflightStatus
 
     enum CodingKeys: String, CodingKey {
@@ -39,6 +40,27 @@ struct UISnapshot: Codable {
         case unresolvedReviews = "unresolved_reviews"
         case recentChanges = "recent_changes"
         case filenamePolicy = "filename_policy"
+        case dateScope = "date_scope"
+    }
+}
+
+struct DateScopeSettings: Codable {
+    let mode: String
+    let start: String?
+    let end: String?
+    let legacy: Bool
+
+    var summary: String {
+        switch mode {
+        case "all":
+            return "All dates"
+        case "within":
+            return "Only within \(start ?? "—") through \(end ?? "—")"
+        case "outside":
+            return "Outside \(start ?? "—") through \(end ?? "—")"
+        default:
+            return "Current annual policy through \(end ?? "—")"
+        }
     }
 }
 

@@ -4,6 +4,26 @@ struct SettingsView: View {
     @EnvironmentObject var model: AppModel
     @State private var pendingRemoval: String?
 
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
+    private func parsedDate(_ value: String?) -> Date {
+        if let value, let date = Self.dateFormatter.date(from: value) {
+            return date
+        }
+        return Date()
+    }
+
+    private func formattedDate(_ value: Date) -> String {
+        Self.dateFormatter.string(from: value)
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
@@ -69,10 +89,105 @@ struct SettingsView: View {
                     }
                     .padding(.vertical, 4)
                 }
-                GroupBox("Annual policy") {
-                    if let annual = model.snapshot?.annual {
-                        LabeledContent("Current scope") { Text("Media through \(annual.includeThrough)") }
-                        LabeledContent("Rule") { Text("Through December 31 two calendar years ago") }
+                GroupBox("Date scope") {
+                    if let scope = model.snapshot?.dateScope {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Picker(
+                                "Apply maintenance to",
+                                selection: Binding(
+                                    get: { scope.mode },
+                                    set: { mode in
+                                        if mode == "all" {
+                                            Task {
+                                                await model.updateDateScope(mode: "all")
+                                            }
+                                        } else {
+                                            let start = scope.start ?? formattedDate(Date())
+                                            let end = scope.end ?? formattedDate(Date())
+                                            Task {
+                                                await model.updateDateScope(
+                                                    mode: mode,
+                                                    start: start,
+                                                    end: end
+                                                )
+                                            }
+                                        }
+                                    }
+                                )
+                            ) {
+                                if scope.mode == "legacy" {
+                                    Text("Current annual policy")
+                                        .tag("legacy")
+                                }
+                                Text("All dates")
+                                    .tag("all")
+                                Text("Only within range")
+                                    .tag("within")
+                                Text("Outside range")
+                                    .tag("outside")
+                            }
+                            .pickerStyle(.segmented)
+
+                            if scope.mode == "within" || scope.mode == "outside" {
+                                DatePicker(
+                                    "From",
+                                    selection: Binding(
+                                        get: { parsedDate(scope.start) },
+                                        set: { date in
+                                            Task {
+                                                await model.updateDateScope(
+                                                    mode: scope.mode,
+                                                    start: formattedDate(date),
+                                                    end: scope.end ?? formattedDate(date)
+                                                )
+                                            }
+                                        }
+                                    ),
+                                    displayedComponents: .date
+                                )
+
+                                DatePicker(
+                                    "Through",
+                                    selection: Binding(
+                                        get: { parsedDate(scope.end) },
+                                        set: { date in
+                                            Task {
+                                                await model.updateDateScope(
+                                                    mode: scope.mode,
+                                                    start: scope.start ?? formattedDate(date),
+                                                    end: formattedDate(date)
+                                                )
+                                            }
+                                        }
+                                    ),
+                                    displayedComponents: .date
+                                )
+                            }
+
+                            Text(scope.summary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            if scope.mode == "legacy" {
+                                Text("This installation is still using Veronica's previous annual date rule. Choose one of the new date-scope options above to replace it.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else if scope.mode == "all" {
+                                Text("Date filtering is disabled. Any otherwise eligible media date may be processed.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else if scope.mode == "within" {
+                                Text("Only media whose resolved date falls within this inclusive range is eligible.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("Only media whose resolved date falls before or after this inclusive range is eligible.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                        .disabled(model.isRunningAnnual)
                     }
                 }
 
