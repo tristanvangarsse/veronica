@@ -274,8 +274,8 @@ struct EngineEvent: Codable, Identifiable {
 
     var title: String {
         switch event {
-        case "annual_started": return "Annual maintenance started"
-        case "annual_cutoff": return "Annual scope confirmed"
+        case "annual_started": return "Maintenance started"
+        case "annual_cutoff": return "Date scope confirmed"
         case "plan_complete": return "Folder scan complete"
         case "batch_started": return "Starting conversion batch"
         case "staging_started": return "Preparing verified replacements"
@@ -285,7 +285,7 @@ struct EngineEvent: Codable, Identifiable {
             if status == "FAILED" { return "Verification failed" }
             return "Staging media"
         case "commit_item": return "Committed verified replacement"
-        case "annual_complete": return "Annual maintenance complete"
+        case "annual_complete": return "Maintenance complete"
         default: return event.replacingOccurrences(of: "_", with: " ").capitalized
         }
     }

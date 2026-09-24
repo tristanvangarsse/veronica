@@ -24,7 +24,7 @@ final class AppModel: ObservableObject {
             if missing.isEmpty {
                 errorMessage = nil
             } else {
-                errorMessage = "Veronica is missing required dependencies: \(missing.joined(separator: ", ")). Install them, then refresh or relaunch Veronica. Annual maintenance will remain disabled until they are available."
+                errorMessage = "Veronica is missing required dependencies: \(missing.joined(separator: ", ")). Install them, then refresh or relaunch Veronica. Maintenance will remain disabled until they are available."
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -111,7 +111,7 @@ final class AppModel: ObservableObject {
     func runAnnual() async {
         guard !isRunningAnnual else { return }
         guard snapshot?.configured == true else {
-            errorMessage = "Add at least one folder before running annual maintenance."
+            errorMessage = "Add at least one folder before running maintenance."
             return
         }
         guard snapshot?.archiveAvailable == true else {
@@ -153,7 +153,7 @@ final class AppModel: ObservableObject {
             }
             loadEvents(from: eventURL)
             if result.exitCode != 0 {
-                errorMessage = "Annual maintenance stopped safely. Review the Activity and Review screens for details."
+                errorMessage = "Maintenance stopped safely. Review the Activity and Review screens for details."
             }
             await refresh()
         } catch {

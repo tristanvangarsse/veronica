@@ -8,7 +8,7 @@ struct ActivityView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Activity").font(.largeTitle.bold())
-                    Text(model.isRunningAnnual ? "Live progress from the current annual run" : "What Veronica did during the most recent run")
+                    Text(model.isRunningAnnual ? "Live progress from the current maintenance run" : "What Veronica did during the most recent run")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -34,7 +34,7 @@ struct ActivityView: View {
                 }
                 .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 10))
             } else {
-                EmptyStateView(title: "No activity yet", systemImage: "waveform.path.ecg", message: "Run annual maintenance from the Dashboard. Planning, verification, and commits will appear here live.")
+                EmptyStateView(title: "No activity yet", systemImage: "waveform.path.ecg", message: "Run maintenance from the Dashboard. Planning, verification, and commits will appear here live.")
             }
         }
         .padding(28)

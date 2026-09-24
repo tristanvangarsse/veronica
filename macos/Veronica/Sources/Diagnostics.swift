@@ -157,7 +157,7 @@ final class DiagnosticsCenter: @unchecked Sendable {
 
             lines.append("")
             lines.append("Dependency readiness")
-            lines.append("- Ready for annual maintenance: \(missingRequirements.isEmpty ? "YES" : "NO")")
+            lines.append("- Ready for maintenance: \(missingRequirements.isEmpty ? "YES" : "NO")")
             if missingRequirements.isEmpty {
                 lines.append("- Missing requirements: none")
             } else {

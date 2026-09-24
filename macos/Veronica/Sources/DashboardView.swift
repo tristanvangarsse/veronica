@@ -39,8 +39,8 @@ struct DashboardView: View {
             Button { Task { await model.refresh() } } label: { Image(systemName: "arrow.clockwise") }
                 .help("Refresh")
         }
-        .confirmationDialog("Run annual maintenance?", isPresented: $confirmRun) {
-            Button("Run Annual Maintenance") { Task { await model.runAnnual() } }
+        .confirmationDialog("Run maintenance?", isPresented: $confirmRun) {
+            Button("Run Maintenance") { Task { await model.runAnnual() } }
             Button("Cancel", role: .cancel) { }
         } message: {
             if let scope = model.snapshot?.dateScope {
@@ -64,7 +64,7 @@ struct DashboardView: View {
             Button {
                 confirmRun = true
             } label: {
-                Label(model.isRunningAnnual ? "Running…" : "Run Annual Maintenance", systemImage: model.isRunningAnnual ? "hourglass" : "play.fill")
+                Label(model.isRunningAnnual ? "Running…" : "Run Maintenance", systemImage: model.isRunningAnnual ? "hourglass" : "play.fill")
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
@@ -133,7 +133,7 @@ struct StatusBanner: View {
     let latestEvent: EngineEvent?
 
     private var title: String {
-        if running { return "Annual maintenance is running" }
+        if running { return "Maintenance is running" }
         if !snapshot.unresolvedReviews.isEmpty { return "Your attention is needed" }
         if let remaining = snapshot.latestPlan?.remainingExecutableCount, remaining > 0 { return "Work is waiting" }
         return "Folders are up to date"

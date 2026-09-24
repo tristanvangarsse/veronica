@@ -276,11 +276,11 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 12) {
                             HStack {
                                 VStack(alignment: .leading, spacing: 3) {
-                                    Text(p.requiredToolsReady ? "Ready for annual maintenance" : "Dependencies required")
+                                    Text(p.requiredToolsReady ? "Ready for maintenance" : "Dependencies required")
                                         .font(.headline)
                                     Text(p.requiredToolsReady
                                          ? "All required runtime components are available."
-                                         : "Annual maintenance remains disabled until the missing requirements below are available.")
+                                         : "Maintenance remains disabled until the missing requirements below are available.")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
