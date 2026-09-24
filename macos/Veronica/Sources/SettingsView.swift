@@ -127,41 +127,62 @@ struct SettingsView: View {
                                     .tag("outside")
                             }
                             .pickerStyle(.segmented)
+                            .frame(maxWidth: 560)
 
                             if scope.mode == "within" || scope.mode == "outside" {
-                                DatePicker(
-                                    "From",
-                                    selection: Binding(
-                                        get: { parsedDate(scope.start) },
-                                        set: { date in
-                                            Task {
-                                                await model.updateDateScope(
-                                                    mode: scope.mode,
-                                                    start: formattedDate(date),
-                                                    end: scope.end ?? formattedDate(date)
-                                                )
-                                            }
-                                        }
-                                    ),
-                                    displayedComponents: .date
-                                )
+                                VStack(alignment: .leading, spacing: 10) {
+                                    HStack(spacing: 14) {
+                                        Text("From")
+                                            .frame(width: 74, alignment: .leading)
 
-                                DatePicker(
-                                    "Through",
-                                    selection: Binding(
-                                        get: { parsedDate(scope.end) },
-                                        set: { date in
-                                            Task {
-                                                await model.updateDateScope(
-                                                    mode: scope.mode,
-                                                    start: scope.start ?? formattedDate(date),
-                                                    end: formattedDate(date)
-                                                )
-                                            }
-                                        }
-                                    ),
-                                    displayedComponents: .date
-                                )
+                                        DatePicker(
+                                            "",
+                                            selection: Binding(
+                                                get: { parsedDate(scope.start) },
+                                                set: { date in
+                                                    Task {
+                                                        await model.updateDateScope(
+                                                            mode: scope.mode,
+                                                            start: formattedDate(date),
+                                                            end: scope.end ?? formattedDate(date)
+                                                        )
+                                                    }
+                                                }
+                                            ),
+                                            displayedComponents: .date
+                                        )
+                                        .labelsHidden()
+                                        .datePickerStyle(.field)
+                                        .fixedSize()
+                                        .frame(minWidth: 210, alignment: .leading)
+                                    }
+
+                                    HStack(spacing: 14) {
+                                        Text("Through")
+                                            .frame(width: 74, alignment: .leading)
+
+                                        DatePicker(
+                                            "",
+                                            selection: Binding(
+                                                get: { parsedDate(scope.end) },
+                                                set: { date in
+                                                    Task {
+                                                        await model.updateDateScope(
+                                                            mode: scope.mode,
+                                                            start: scope.start ?? formattedDate(date),
+                                                            end: formattedDate(date)
+                                                        )
+                                                    }
+                                                }
+                                            ),
+                                            displayedComponents: .date
+                                        )
+                                        .labelsHidden()
+                                        .datePickerStyle(.field)
+                                        .fixedSize()
+                                        .frame(minWidth: 210, alignment: .leading)
+                                    }
+                                }
                             }
 
                             Text(scope.summary)
@@ -359,8 +380,14 @@ struct SettingsView: View {
                     Text("Veronica uses verified staging, per-file quarantine, rollback, and durable audit history.")
                         .font(.caption).foregroundStyle(.secondary).padding(.top, 4)
                 }
-            }.padding(28)
+            }
+            .frame(maxWidth: 900, alignment: .leading)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 26)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .background(VeronicaTheme.canvas)
+        .groupBoxStyle(VeronicaGroupBoxStyle(fill: VeronicaTheme.canvas))
         .confirmationDialog(
             "Remove this folder from Veronica?",
             isPresented: Binding(

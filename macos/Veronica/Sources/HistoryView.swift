@@ -49,10 +49,18 @@ struct HistoryView: View {
                     .width(60)
                 }
             } else {
-                EmptyStateView(title: "No history", systemImage: "clock.arrow.circlepath", message: "Files only appear here after a verified replacement has been committed.")
+                SectionEmptyStateView(
+                    title: "No history",
+                    systemImage: "clock.arrow.circlepath",
+                    message: "Files only appear here after a verified replacement has been committed."
+                )
             }
         }
-        .padding(28)
+        .frame(maxWidth: 1180, alignment: .leading)
+        .padding(.horizontal, 32)
+        .padding(.vertical, 26)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(VeronicaTheme.canvas)
     }
 
     private func size(_ bytes: Int64) -> String {

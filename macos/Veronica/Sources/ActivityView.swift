@@ -24,6 +24,8 @@ struct ActivityView: View {
                     ActivityEventRow(event: event)
                 }
                 .listStyle(.inset)
+                .scrollContentBackground(.hidden)
+                .background(VeronicaTheme.canvas)
             } else if !model.activityLines.isEmpty {
                 ScrollView {
                     Text(model.activityLines.joined(separator: "\n"))
@@ -34,10 +36,18 @@ struct ActivityView: View {
                 }
                 .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 10))
             } else {
-                EmptyStateView(title: "No activity yet", systemImage: "waveform.path.ecg", message: "Run maintenance from the Dashboard. Planning, verification, and commits will appear here live.")
+                SectionEmptyStateView(
+                    title: "No activity yet",
+                    systemImage: "waveform.path.ecg",
+                    message: "Run Veronica from the Dashboard. Planning, verification, and commits will appear here live."
+                )
             }
         }
-        .padding(28)
+        .frame(maxWidth: 1100, alignment: .leading)
+        .padding(.horizontal, 32)
+        .padding(.vertical, 26)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(VeronicaTheme.canvas)
     }
 }
 

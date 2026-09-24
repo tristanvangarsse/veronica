@@ -89,15 +89,21 @@ struct ReviewView: View {
                     .padding(.vertical, 8)
                 }
                 .listStyle(.inset)
+                .scrollContentBackground(.hidden)
+                .background(VeronicaTheme.canvas)
             } else {
-                EmptyStateView(
+                SectionEmptyStateView(
                     title: "Nothing needs review",
                     systemImage: "checkmark.circle",
                     message: "Every item in the latest plan is either complete, deliberately preserved, or safely skippable."
                 )
             }
         }
-        .padding(28)
+        .frame(maxWidth: 1100, alignment: .leading)
+        .padding(.horizontal, 32)
+        .padding(.vertical, 26)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(VeronicaTheme.canvas)
         .confirmationDialog(
             "Keep this original unchanged?",
             isPresented: Binding(

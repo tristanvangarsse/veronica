@@ -6,7 +6,7 @@ struct DashboardView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 22) {
                 header
 
                 if let s = model.snapshot {
@@ -32,8 +32,13 @@ struct DashboardView: View {
                     EmptyStateView(title: "Veronica couldn't read its state", systemImage: "exclamationmark.triangle", message: model.errorMessage ?? "Refresh to try again.")
                 }
             }
-            .padding(28)
+            .frame(maxWidth: 1120, alignment: .leading)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 26)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .background(VeronicaTheme.canvas)
+        .groupBoxStyle(VeronicaGroupBoxStyle())
         .navigationTitle("Dashboard")
         .toolbar {
             Button { Task { await model.refresh() } } label: { Image(systemName: "arrow.clockwise") }
@@ -54,10 +59,14 @@ struct DashboardView: View {
     private var header: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Veronica").font(.largeTitle.bold())
+                Text("Veronica")
+                    .font(.system(size: 34, weight: .bold, design: .default))
+                    .foregroundStyle(VeronicaTheme.ink)
+
                 if let scope = model.snapshot?.dateScope {
                     Text("Date scope: \(scope.summary)")
-                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                        .foregroundStyle(VeronicaTheme.secondaryInk)
                 }
             }
             Spacer()
@@ -67,6 +76,7 @@ struct DashboardView: View {
                 Label(model.isRunningAnnual ? "Running…" : "Run Veronica", systemImage: model.isRunningAnnual ? "hourglass" : "play.fill")
             }
             .buttonStyle(.borderedProminent)
+            .tint(VeronicaTheme.accent)
             .controlSize(.large)
             .disabled(model.isRunningAnnual || model.snapshot?.archiveAvailable != true || model.snapshot?.preflight.requiredToolsReady != true)
         }
@@ -155,15 +165,37 @@ struct StatusBanner: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: icon).font(.title2)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.headline)
-                Text(detail).font(.callout).foregroundStyle(.secondary)
+            ZStack {
+                Circle()
+                    .fill(VeronicaTheme.accent.opacity(0.12))
+                    .frame(width: 38, height: 38)
+
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(VeronicaTheme.accent)
             }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                    .foregroundStyle(VeronicaTheme.ink)
+
+                Text(detail)
+                    .font(.callout)
+                    .foregroundStyle(VeronicaTheme.secondaryInk)
+            }
+
             Spacer()
         }
-        .padding(16)
-        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 14))
+        .padding(18)
+        .background(
+            VeronicaTheme.accentFill,
+            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(VeronicaTheme.accent.opacity(0.14), lineWidth: 1)
+        }
     }
 }
 
@@ -196,13 +228,33 @@ struct MetricCard: View {
     let value: String
     let detail: String
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.title2.bold()).monospacedDigit()
-            Text(detail).font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 7) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(VeronicaTheme.accent)
+                .frame(width: 28, height: 3)
+
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(VeronicaTheme.secondaryInk)
+
+            Text(value)
+                .font(.title2.bold())
+                .foregroundStyle(VeronicaTheme.ink)
+                .monospacedDigit()
+
+            Text(detail)
+                .font(.caption)
+                .foregroundStyle(VeronicaTheme.secondaryInk)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
+        .padding(18)
+        .background(
+            VeronicaTheme.subtleFill,
+            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(VeronicaTheme.border, lineWidth: 1)
+        }
     }
 }
