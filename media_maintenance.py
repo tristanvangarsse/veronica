@@ -4351,7 +4351,7 @@ def cmd_ui_snapshot(args: argparse.Namespace) -> int:
             "plan_path": aggregate_plan_path,
         }
 
-    legacy_root = database_archive_root(state_dir)
+    legacy_root = configured_archive_root(state_dir)
 
     payload = {
         "version": VERSION,
