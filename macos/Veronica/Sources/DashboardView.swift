@@ -39,8 +39,8 @@ struct DashboardView: View {
             Button { Task { await model.refresh() } } label: { Image(systemName: "arrow.clockwise") }
                 .help("Refresh")
         }
-        .confirmationDialog("Run maintenance?", isPresented: $confirmRun) {
-            Button("Run Maintenance") { Task { await model.runAnnual() } }
+        .confirmationDialog("Run Veronica?", isPresented: $confirmRun) {
+            Button("Run Veronica") { Task { await model.runAnnual() } }
             Button("Cancel", role: .cancel) { }
         } message: {
             if let scope = model.snapshot?.dateScope {
@@ -64,7 +64,7 @@ struct DashboardView: View {
             Button {
                 confirmRun = true
             } label: {
-                Label(model.isRunningAnnual ? "Running…" : "Run Maintenance", systemImage: model.isRunningAnnual ? "hourglass" : "play.fill")
+                Label(model.isRunningAnnual ? "Running…" : "Run Veronica", systemImage: model.isRunningAnnual ? "hourglass" : "play.fill")
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
