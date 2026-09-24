@@ -1,4 +1,33 @@
 import SwiftUI
+import AppKit
+
+
+private struct WindowChromeConfigurator: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+
+        DispatchQueue.main.async {
+            configure(view.window)
+        }
+
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            configure(nsView.window)
+        }
+    }
+
+    private func configure(_ window: NSWindow?) {
+        guard let window else { return }
+
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.toolbarStyle = .unified
+    }
+}
+
 
 enum VeronicaTheme {
     // Brand palette:
@@ -47,54 +76,62 @@ struct VeronicaGroupBoxStyle: GroupBoxStyle {
     }
 }
 
-enum SidebarItem: String, CaseIterable, Identifiable {
+private enum AppSection: String, CaseIterable, Identifiable {
     case dashboard = "Dashboard"
     case activity = "Activity"
     case review = "Review"
     case history = "History"
     case settings = "Settings"
+
     var id: String { rawValue }
-    var icon: String {
+
+    var systemImage: String {
         switch self {
-        case .dashboard: return "gauge.with.dots.needle.67percent"
-        case .activity: return "waveform.path.ecg"
-        case .review: return "exclamationmark.bubble"
-        case .history: return "clock.arrow.circlepath"
-        case .settings: return "gearshape"
+        case .dashboard:
+            return "gauge.with.dots.needle.67percent"
+        case .activity:
+            return "waveform.path.ecg"
+        case .review:
+            return "exclamationmark.bubble"
+        case .history:
+            return "clock.arrow.circlepath"
+        case .settings:
+            return "gearshape"
         }
     }
 }
 
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
-    @State private var selection: SidebarItem?
+    @State private var selectedSection: AppSection
 
     init() {
         let arguments = ProcessInfo.processInfo.arguments
-        var initialSelection: SidebarItem = .dashboard
+        var initialSelection: AppSection = .dashboard
 
         if let index = arguments.firstIndex(of: "--ui-section"),
            arguments.indices.contains(index + 1) {
             let requested = arguments[index + 1].lowercased()
 
-            if let section = SidebarItem.allCases.first(
+            if let section = AppSection.allCases.first(
                 where: { $0.rawValue.lowercased() == requested }
             ) {
                 initialSelection = section
             }
         }
 
-        _selection = State(initialValue: initialSelection)
+        _selectedSection = State(initialValue: initialSelection)
     }
-
 
     var body: some View {
         Group {
             if model.isLoading && model.snapshot == nil {
                 ProgressView("Starting Veronica…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+
             } else if let snapshot = model.snapshot, !snapshot.configured {
                 SetupView()
+
             } else {
                 mainInterface
             }
@@ -102,18 +139,30 @@ struct ContentView: View {
         .tint(VeronicaTheme.accent)
         .foregroundStyle(VeronicaTheme.ink)
         .background(VeronicaTheme.canvas)
+        .background {
+            WindowChromeConfigurator()
+                .frame(width: 0, height: 0)
+        }
         .overlay(alignment: .bottom) {
             if let error = model.errorMessage {
                 HStack(spacing: 9) {
                     Image(systemName: "exclamationmark.triangle.fill")
+
                     Text(error)
+
                     Spacer()
-                    Button("Dismiss") { model.errorMessage = nil }
-                        .buttonStyle(.link)
+
+                    Button("Dismiss") {
+                        model.errorMessage = nil
+                    }
+                    .buttonStyle(.link)
                 }
                 .font(.callout)
                 .padding(12)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .background(
+                    .regularMaterial,
+                    in: RoundedRectangle(cornerRadius: 12)
+                )
                 .shadow(radius: 6, y: 2)
                 .padding()
             }
@@ -121,81 +170,152 @@ struct ContentView: View {
     }
 
     private var mainInterface: some View {
-        NavigationSplitView {
-            List(SidebarItem.allCases) { item in
+        ZStack {
+            VeronicaTheme.canvas
+                .ignoresSafeArea()
+
+            switch selectedSection {
+            case .dashboard:
+                DashboardView()
+
+            case .activity:
+                ActivityView()
+
+            case .review:
+                ReviewView()
+
+            case .history:
+                HistoryView()
+
+            case .settings:
+                SettingsView()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .toolbar {
+            ToolbarItemGroup(placement: .principal) {
+                HStack(spacing: 8) {
+                    ForEach(AppSection.allCases) { section in
+                        Button {
+                            selectedSection = section
+                        } label: {
+                            HStack(spacing: 7) {
+                                Image(systemName: section.systemImage)
+
+                                Text(section.rawValue)
+                                    .lineLimit(1)
+
+                                if section == .review,
+                                   let count = model.snapshot?.unresolvedReviews.count,
+                                   count > 0 {
+                                    Text(count.formatted())
+                                        .font(.caption.bold())
+                                        .padding(.horizontal, 7)
+                                        .padding(.vertical, 2)
+                                        .background(
+                                            selectedSection == section
+                                                ? VeronicaTheme.accent.opacity(0.15)
+                                                : VeronicaTheme.strongerFill,
+                                            in: Capsule()
+                                        )
+                                }
+                            }
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(
+                                selectedSection == section
+                                    ? VeronicaTheme.accent
+                                    : VeronicaTheme.ink
+                            )
+                            .padding(.horizontal, 13)
+                            .padding(.vertical, 5)
+                            .frame(minHeight: 32)
+                            .contentShape(Rectangle())
+                            .background {
+                                if selectedSection == section {
+                                    Capsule()
+                                        .fill(VeronicaTheme.accent.opacity(0.11))
+                                }
+                            }
+                            .fixedSize(horizontal: true, vertical: false)
+                        }
+                        .buttonStyle(.plain)
+                        .contentShape(Rectangle())
+                        .help(section.rawValue)
+                    }
+                }
+                .fixedSize()
+            }
+        }
+    }
+
+    private var toolbarNavigation: some View {
+        HStack(spacing: 5) {
+            HStack(spacing: 7) {
+                Image(systemName: "photo.on.rectangle.angled")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(VeronicaTheme.accent)
+
+                Text("Veronica")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(VeronicaTheme.ink)
+            }
+            .padding(.trailing, 6)
+
+            Divider()
+                .frame(height: 20)
+                .padding(.horizontal, 2)
+
+            ForEach(AppSection.allCases) { section in
                 Button {
-                    selection = item
+                    selectedSection = section
                 } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: item.icon)
-                            .frame(width: 18)
+                    HStack(spacing: 6) {
+                        Image(systemName: section.systemImage)
+                            .frame(width: 15)
 
-                        Text(item.rawValue)
-                            .fontWeight(selection == item ? .semibold : .regular)
+                        Text(section.rawValue)
 
-                        Spacer()
-
-                        if item == .review,
+                        if section == .review,
                            let count = model.snapshot?.unresolvedReviews.count,
                            count > 0 {
                             Text(count.formatted())
-                                .font(.caption.bold())
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 2)
+                                .font(.caption2.bold())
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1)
                                 .background(
-                                    selection == item
-                                        ? VeronicaTheme.accent.opacity(0.14)
+                                    selectedSection == section
+                                        ? VeronicaTheme.accent.opacity(0.16)
                                         : VeronicaTheme.strongerFill,
                                     in: Capsule()
                                 )
                         }
                     }
+                    .font(.system(size: 13, weight: .medium))
+                    .fixedSize(horizontal: true, vertical: false)
                     .foregroundStyle(
-                        selection == item
+                        selectedSection == section
                             ? VeronicaTheme.accent
                             : VeronicaTheme.ink
                     )
                     .padding(.horizontal, 9)
-                    .padding(.vertical, 7)
+                    .padding(.vertical, 5)
                     .contentShape(Rectangle())
                     .background(
-                        selection == item
+                        selectedSection == section
                             ? VeronicaTheme.accent.opacity(0.11)
                             : Color.clear,
                         in: RoundedRectangle(
-                            cornerRadius: 8,
+                            cornerRadius: 7,
                             style: .continuous
                         )
                     )
                 }
                 .buttonStyle(.plain)
-            }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
-            .background(VeronicaTheme.canvas)
-            .navigationSplitViewColumnWidth(
-                min: 178,
-                ideal: 190,
-                max: 220
-            )
-            .navigationTitle("Veronica")
-        } detail: {
-            ZStack {
-                VeronicaTheme.canvas
-                    .ignoresSafeArea()
-
-                switch selection ?? .dashboard {
-                case .dashboard: DashboardView()
-                case .activity: ActivityView()
-                case .review: ReviewView()
-                case .history: HistoryView()
-                case .settings: SettingsView()
-                }
+                .help(section.rawValue)
             }
         }
     }
 }
-
 
 struct SectionEmptyStateView: View {
     let title: String

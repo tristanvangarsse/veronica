@@ -39,11 +39,6 @@ struct DashboardView: View {
         }
         .background(VeronicaTheme.canvas)
         .groupBoxStyle(VeronicaGroupBoxStyle())
-        .navigationTitle("Dashboard")
-        .toolbar {
-            Button { Task { await model.refresh() } } label: { Image(systemName: "arrow.clockwise") }
-                .help("Refresh")
-        }
         .confirmationDialog("Run Veronica?", isPresented: $confirmRun) {
             Button("Run Veronica") { Task { await model.runAnnual() } }
             Button("Cancel", role: .cancel) { }

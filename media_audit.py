@@ -468,10 +468,14 @@ class Auditor:
             return Decision("RED", "PRESERVE", "symlink_not_followed")
         if row.get("cross_filesystem"):
             return Decision("RED", "PRESERVE", "cross_filesystem_boundary")
-        if root_name not in self.config.get("roots", {}):
-            return Decision("RED", "PRESERVE", "unknown_top_level_root")
-        if policy.get("mode") == "read_only_archive":
-            return Decision("RED", "PRESERVE", "root_policy_read_only_archive")
+        # Named root policies are retained for historical Veronica archive
+        # layouts, but arbitrary user-configured scan folders must remain
+        # structure-agnostic. An unknown top-level directory is therefore
+        # evaluated by detected media type instead of being preserved solely
+        # because of its folder name.
+        if root_name in self.config.get("roots", {}):
+            if policy.get("mode") == "read_only_archive":
+                return Decision("RED", "PRESERVE", "root_policy_read_only_archive")
         if self.protected_photo_path(rel):
             return Decision("RED", "PRESERVE", "protected_photo_project_path")
         if ext_kind in {"master_image", "project", "document"}:
@@ -524,18 +528,37 @@ class Auditor:
         if tags & compressed_tags:
             return Decision("GREEN", "SKIP", "already_compressed_tag")
 
-        if root_name == "Photo_Library" and kind in {"video", "audio"}:
-            return Decision("YELLOW", "REVIEW", "photo_library_nonimage_media")
-        if root_name == "Photo_Library" and kind == "image":
-            return Decision("GREEN", "CANDIDATE", "eligible_finished_raster_needs_conversion_policy_check")
-        if root_name == "Streams" and kind == "audio":
-            min_bytes = int(float(self.config.get("audio_min_size_mb", 10)) * 1024 * 1024)
+        # Once a file has passed the safety, date, probe, and protected-format
+        # checks above, conversion eligibility is determined by detected media
+        # type rather than by folder names. Veronica scan folders may use any
+        # directory structure.
+        if kind == "audio":
+            min_bytes = int(
+                float(self.config.get("audio_min_size_mb", 10)) * 1024 * 1024
+            )
             if int(row.get("size") or 0) <= min_bytes:
                 return Decision("GREEN", "SKIP", "audio_below_size_threshold")
-            return Decision("GREEN", "CANDIDATE", "eligible_streams_audio_over_size_threshold")
-        if root_name == "Streams":
-            return Decision("GREEN", "CANDIDATE", f"eligible_streams_{kind}")
-        return Decision("YELLOW", "REVIEW", "no_explicit_conversion_policy")
+            return Decision(
+                "GREEN",
+                "CANDIDATE",
+                "eligible_audio_over_size_threshold",
+            )
+
+        if kind == "image":
+            return Decision(
+                "GREEN",
+                "CANDIDATE",
+                "eligible_image_for_policy_evaluation",
+            )
+
+        if kind == "video":
+            return Decision(
+                "GREEN",
+                "CANDIDATE",
+                "eligible_video_for_policy_evaluation",
+            )
+
+        return Decision("YELLOW", "REVIEW", "no_media_conversion_policy")
 
     def scan_file(self, path: Path, is_symlink: bool = False) -> None:
         rel = self.relative(path)

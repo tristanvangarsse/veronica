@@ -14,6 +14,7 @@ struct VeronicaApp: App {
                     await model.refresh()
                 }
         }
+        .windowToolbarStyle(.unified)
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Refresh") { Task { await model.refresh() } }

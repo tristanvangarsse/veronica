@@ -59,7 +59,7 @@ struct DateScopeSettings: Codable {
         case "outside":
             return "Outside \(start ?? "—") through \(end ?? "—")"
         default:
-            return "Current annual policy through \(end ?? "—")"
+            return "All dates"
         }
     }
 }

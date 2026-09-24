@@ -115,10 +115,6 @@ struct SettingsView: View {
                                     }
                                 )
                             ) {
-                                if scope.mode == "legacy" {
-                                    Text("Current annual policy")
-                                        .tag("legacy")
-                                }
                                 Text("All dates")
                                     .tag("all")
                                 Text("Only within range")
@@ -189,11 +185,7 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
 
-                            if scope.mode == "legacy" {
-                                Text("This installation is still using Veronica's previous annual date rule. Choose one of the new date-scope options above to replace it.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            } else if scope.mode == "all" {
+                            if scope.mode == "all" {
                                 Text("Date filtering is disabled. Any otherwise eligible media date may be processed.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)

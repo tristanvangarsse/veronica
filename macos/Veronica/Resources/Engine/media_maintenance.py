@@ -198,14 +198,14 @@ def date_scope_product_settings(
 ) -> dict[str, Any]:
     """Return the validated effective date-scope policy.
 
-    Existing installations with no explicit date-scope setting retain the
-    historical annual policy until the user chooses a new mode.
+    All dates is the product default. The legacy annual policy is retained
+    only for state that explicitly identifies itself as legacy.
     """
     saved = load_product_settings(state_dir)
-    mode = str(saved.get("date_scope_mode") or "legacy")
+    mode = str(saved.get("date_scope_mode") or "all")
 
     if mode not in {"legacy", "all", "within", "outside"}:
-        mode = "legacy"
+        mode = "all"
 
     start = saved.get("date_scope_start")
     end = saved.get("date_scope_end")
@@ -215,12 +215,12 @@ def date_scope_product_settings(
             start_date = dt.date.fromisoformat(str(start))
             end_date = dt.date.fromisoformat(str(end))
         except (TypeError, ValueError):
-            mode = "legacy"
+            mode = "all"
             start = None
             end = None
         else:
             if start_date > end_date:
-                mode = "legacy"
+                mode = "all"
                 start = None
                 end = None
             else:
@@ -359,11 +359,10 @@ def prepare_scan_folder_state(base_state_dir: Path, folder: Path) -> Path:
     child["filename_date_format"] = parent_filename["date_format"]
     child["filename_max_bytes"] = parent_filename["max_bytes"]
 
-    parent_settings = load_product_settings(base_state_dir)
-    if "date_scope_mode" in parent_settings:
-        child["date_scope_mode"] = parent_settings.get("date_scope_mode")
-        child["date_scope_start"] = parent_settings.get("date_scope_start")
-        child["date_scope_end"] = parent_settings.get("date_scope_end")
+    parent_scope = date_scope_product_settings(base_state_dir)
+    child["date_scope_mode"] = parent_scope["mode"]
+    child["date_scope_start"] = parent_scope.get("start")
+    child["date_scope_end"] = parent_scope.get("end")
 
     child["managed_by_multi_folder"] = True
     child["parent_state_dir"] = str(base_state_dir)
@@ -1100,42 +1099,64 @@ def make_item(row: dict[str, Any], asset_id: int, cfg: dict[str, Any]) -> dict[s
         base.update(operation="SKIP", reason=row.get("reason") or "not_candidate")
         return base
 
-    if root == "Streams" and kind == "image":
-        target_mp = float(cfg.get("streams_image_max_megapixels", 10))
+    # Historical named roots retain their special policy where applicable,
+    # while arbitrary user-configured folders use the general media policy.
+    is_photo_library = root == "Photo_Library"
+
+    if kind == "image":
+        target_mp = float(
+            cfg.get(
+                "photo_library_max_megapixels" if is_photo_library else "streams_image_max_megapixels",
+                20 if is_photo_library else 10,
+            )
+        )
         mp = row.get("megapixels")
         if mp is None:
             base.update(operation="REVIEW", reason="image_dimensions_unknown")
         elif float(mp) <= target_mp:
-            base.update(operation="SKIP_NO_BENEFIT", reason="image_at_or_below_target", target={"max_megapixels": target_mp})
+            base.update(
+                operation="SKIP_NO_BENEFIT",
+                reason="image_at_or_below_target",
+                target={"max_megapixels": target_mp},
+            )
         elif row.get("animated"):
             base.update(operation="PRESERVE", reason="true_animated_image")
         else:
             ext = (row.get("extension") or "").lower()
             fmt = "png" if ext == ".png" and row.get("has_alpha") else "jpeg"
-            base.update(operation="CONVERT_IMAGE", policy_version=policies.get("streams_image"), reason=legacy_note + "streams_image_above_target",
-                        target={"max_megapixels": target_mp, "format": fmt, "preserve_alpha": bool(row.get("has_alpha"))}, executable=True)
+            policy_key = "photo_library_image" if is_photo_library else "streams_image"
+            reason = (
+                "photo_library_image_above_target"
+                if is_photo_library
+                else "image_above_target"
+            )
+            base.update(
+                operation="CONVERT_IMAGE",
+                policy_version=policies.get(policy_key),
+                reason=legacy_note + reason,
+                target={
+                    "max_megapixels": target_mp,
+                    "format": fmt,
+                    "preserve_alpha": bool(row.get("has_alpha")),
+                },
+                executable=True,
+            )
         return base
 
-    if root == "Photo_Library" and kind == "image":
-        target_mp = float(cfg.get("photo_library_max_megapixels", 20))
-        mp = row.get("megapixels")
-        if mp is None:
-            base.update(operation="REVIEW", reason="image_dimensions_unknown")
-        elif float(mp) <= target_mp:
-            base.update(operation="SKIP_NO_BENEFIT", reason="image_at_or_below_target", target={"max_megapixels": target_mp})
-        else:
-            ext = (row.get("extension") or "").lower()
-            fmt = "png" if ext == ".png" and row.get("has_alpha") else "jpeg"
-            base.update(operation="CONVERT_IMAGE", policy_version=policies.get("photo_library_image"), reason=legacy_note + "photo_library_image_above_target",
-                        target={"max_megapixels": target_mp, "format": fmt, "preserve_alpha": bool(row.get("has_alpha"))}, executable=True)
+    if kind == "video":
+        base.update(
+            operation="CONVERT_VIDEO",
+            policy_version=policies.get("streams_video"),
+            reason=legacy_note + "eligible_unprocessed_video",
+            target={
+                "preset": cfg.get("video_preset_file", "preset-720P.json"),
+                "container": "mp4",
+            },
+            executable=True,
+        )
         return base
 
-    if root == "Streams" and kind == "video":
-        base.update(operation="CONVERT_VIDEO", policy_version=policies.get("streams_video"), reason=legacy_note + "eligible_unprocessed_video",
-                    target={"preset": cfg.get("video_preset_file", "preset-720P.json"), "container": "mp4"}, executable=True)
-        return base
-
-    if root == "Streams" and kind == "audio":
+    if kind == "audio":
         min_bytes = int(float(cfg.get("audio_min_size_mb", 10)) * 1024 * 1024)
         if int(row.get("size") or 0) <= min_bytes:
             base.update(operation="SKIP_NO_BENEFIT", reason="audio_below_size_threshold")
@@ -4746,7 +4767,7 @@ def cmd_annual(args: argparse.Namespace) -> int:
 
     print(f"Veronica {VERSION} maintenance")
     print("Mode: ONE-COMMAND CONTROLLER WITH BOUNDED STAGING/COMMIT WINDOWS")
-    print("Safety: any new REVIEW item or staging/commit anomaly stops automation")
+    print("Safety: REVIEW items remain pending; any staging, verification, or commit anomaly stops automation")
 
     if scope["mode"] == "legacy":
         print(f"Date scope: current annual policy through {scope['end']}")
@@ -4765,8 +4786,15 @@ def cmd_annual(args: argparse.Namespace) -> int:
     )
 
     plan_args = argparse.Namespace(
-        root=str(root), state_dir=str(state_dir), config=args.config,
-        run_date=annual_run_date.isoformat(), cutoff_override=annual_cutoff.isoformat(),
+        root=str(root),
+        state_dir=str(state_dir),
+        config=args.config,
+        run_date=annual_run_date.isoformat(),
+        cutoff_override=(
+            annual_cutoff.isoformat()
+            if scope["mode"] == "legacy"
+            else None
+        ),
     )
     rc = cmd_plan(plan_args)
     if rc != 0:
@@ -4790,15 +4818,14 @@ def cmd_annual(args: argparse.Namespace) -> int:
 
     reviews = [i for i in plan.get("items", []) if i.get("operation") == "REVIEW"]
     if reviews:
-        print(f"STOP: plan contains {len(reviews)} REVIEW item(s); no conversions will be staged or committed.")
+        print(
+            f"Plan contains {len(reviews)} REVIEW item(s). "
+            "They will remain pending while unrelated safe executable work continues."
+        )
         for item in reviews[:20]:
             print(f"  REVIEW {item['relpath']} — {item.get('reason')}")
         if len(reviews) > 20:
             print(f"  ... and {len(reviews)-20} more")
-        report = _annual_write_report(state_dir, plan, "NEEDS_REVIEW", started_at, [],
-                                      "New or changed review items require a human decision before automation proceeds.")
-        print(f"Annual report: {report}")
-        return 2
 
     remaining = _annual_remaining(plan, state_dir)
     unsupported = [
@@ -4993,12 +5020,54 @@ def cmd_annual(args: argparse.Namespace) -> int:
             return 2
         remaining = new_remaining
 
-    report = _annual_write_report(state_dir, plan, "COMPLETE", started_at, batches)
+    unresolved_reviews = [
+        i for i in plan.get("items", [])
+        if i.get("operation") == "REVIEW"
+    ]
+
+    final_status = (
+        "COMPLETE_WITH_REVIEW"
+        if unresolved_reviews
+        else "COMPLETE"
+    )
+
+    final_note = (
+        f"All safe executable work completed. "
+        f"{len(unresolved_reviews)} review item(s) remain pending."
+        if unresolved_reviews
+        else "All safe executable work completed and no review items remain."
+    )
+
+    report = _annual_write_report(
+        state_dir,
+        plan,
+        final_status,
+        started_at,
+        batches,
+        final_note,
+    )
+
     print("\nAnnual maintenance COMPLETE")
     print(f"Plan: {plan_path}")
     print(f"Annual report: {report}")
-    print("No executable work or unresolved REVIEW items remain for this immutable plan.")
-    emit_event("annual_complete", plan_id=plan["plan_id"], plan_path=str(plan_path), report=str(report), batches=batches)
+
+    if unresolved_reviews:
+        print(
+            f"Safe executable work is complete; "
+            f"{len(unresolved_reviews)} REVIEW item(s) remain pending."
+        )
+    else:
+        print("No executable work or unresolved REVIEW items remain.")
+
+    emit_event(
+        "annual_complete",
+        plan_id=plan["plan_id"],
+        plan_path=str(plan_path),
+        report=str(report),
+        batches=batches,
+        unresolved_reviews=len(unresolved_reviews),
+        status=final_status,
+    )
     close_event_stream()
     return 0
 
