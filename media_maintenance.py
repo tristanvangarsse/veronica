@@ -198,11 +198,11 @@ def date_scope_product_settings(
 ) -> dict[str, Any]:
     """Return the validated effective date-scope policy.
 
-    All dates is the product default. The legacy annual policy is retained
-    only for state that explicitly identifies itself as legacy.
+    The annual calendar policy is the product default. Explicit saved
+    settings may opt into all, within, or outside date scopes.
     """
     saved = load_product_settings(state_dir)
-    mode = str(saved.get("date_scope_mode") or "all")
+    mode = str(saved.get("date_scope_mode") or "legacy")
 
     if mode not in {"legacy", "all", "within", "outside"}:
         mode = "all"
@@ -4790,11 +4790,7 @@ def cmd_annual(args: argparse.Namespace) -> int:
         state_dir=str(state_dir),
         config=args.config,
         run_date=annual_run_date.isoformat(),
-        cutoff_override=(
-            annual_cutoff.isoformat()
-            if scope["mode"] == "legacy"
-            else None
-        ),
+        cutoff_override=annual_cutoff.isoformat(),
     )
     rc = cmd_plan(plan_args)
     if rc != 0:
